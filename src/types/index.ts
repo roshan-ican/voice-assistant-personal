@@ -167,7 +167,15 @@ export type WebSocketMessageType =
     | 'recording_stopped'
     | 'chunk_received'
     | 'audio_received'
-    | 'language_changed';
+    | 'language_changed'
+    | 'cancel_recording'
+    | 'recording_cancelled'
+    | 'transcription_complete'
+    | 'language_detected'
+    | 'enhancement_complete'
+    | 'intent_unclear'
+    | 'realtime_transcript'
+    | 'binary_audio_received';
 
 // Queue Job Types
 export interface TodoJobData {

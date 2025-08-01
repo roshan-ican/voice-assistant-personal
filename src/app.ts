@@ -1,18 +1,16 @@
-// src/app.ts - Main Application File (Fixed with relative imports)
+// src/app.ts - Enhanced with Real Gemini Integration
 import Fastify from 'fastify';
 import { config, validateConfig } from './utils/config.js';
 import { logger } from './utils/logger.js';
 import { dbManager } from './data/database/mongodb.js';
 import { UserRepository } from './data/repositories/userRepository.js';
 import { TodoRepository } from './data/repositories/todoRepository.js';
-import { wsManager } from './websockets/websocketManager.js';
-import mongoose from 'mongoose';
+import { enhancedWsManager } from './websockets/enhancedWebSocketManager.js';
+import { GeminiService } from './services/geminiService.js';
 import type { DatabaseHealth } from './types/index.js';
 
-// Validate configuration first
 validateConfig();
 
-// Fix: Properly type the Fastify logger options
 const loggerOptions = config.node_env === 'development' ? {
   level: config.logging.level,
   transport: {
@@ -26,270 +24,272 @@ const loggerOptions = config.node_env === 'development' ? {
   level: config.logging.level
 };
 
-const fastify = Fastify({
-  logger: loggerOptions
-});
+const fastify = Fastify({ logger: loggerOptions });
 
-// Register plugins
+// Initialize Gemini service
+const geminiService = new GeminiService();
+
 await fastify.register(import('@fastify/helmet'));
 await fastify.register(import('@fastify/cors'), {
   origin: config.node_env === 'development' ? true : ['http://localhost:3000'],
   credentials: true
 });
-
-await fastify.register(import('@fastify/rate-limit'), {
-  max: config.rateLimit.max,
-  timeWindow: config.rateLimit.window
-});
-
 await fastify.register(import('@fastify/websocket'));
 
-// Initialize database connection
 await dbManager.connect();
 
-// Register repositories as decorators for easy access
 fastify.decorate('userRepository', new UserRepository());
 fastify.decorate('todoRepository', new TodoRepository());
+fastify.decorate('geminiService', geminiService);
 
-// Declare the types for decorators
+// Declare types for decorators
 declare module 'fastify' {
   interface FastifyInstance {
     userRepository: UserRepository;
     todoRepository: TodoRepository;
+    geminiService: GeminiService;
   }
 }
 
-// ====== ROUTES ======
-
-// Health check route
+// Enhanced Health Check with Gemini Status
 fastify.get('/health', async () => {
-
   const dbHealth: DatabaseHealth = await dbManager.healthCheck();
+  const wsHealth = await enhancedWsManager.performSystemHealthCheck();
+  const geminiHealth = await geminiService.healthCheck();
 
   return {
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: '1.0.0',
+    version: '2.0.0',
     environment: config.node_env,
     database: dbHealth,
     services: {
       mongodb: dbHealth.status === 'connected' ? '✅' : '❌',
-      redis: '🔄', // Will add Redis health check later
-      websockets: wsManager.getActiveConnections() > 0 ? '✅' : '⚪',
-      active_connections: wsManager.getActiveConnections(),
-      voice_processing: '🎤',
-      embeddings: '🧠'
-    }
-  };
-});
-
-// API Status
-fastify.get('/api/v1/status', async () => {
-
-  return {
-    message: 'Voice Todo API is running!',
+      gemini: geminiHealth.status === 'healthy' ? '🤖✅' :
+        geminiHealth.status === 'degraded' ? '🤖⚠️' : '🤖❌',
+      websockets: wsHealth.services.websockets === 'healthy' ? '🎤✅' : '🎤❌',
+      active_connections: enhancedWsManager.getActiveConnections(),
+      ai_model: geminiHealth.model
+    },
     features: {
       voice_processing: 'enabled',
+      real_time_transcription: 'enabled',
       multi_language: 'enabled',
-      notion_integration: 'enabled',
-      semantic_search: 'enabled'
+      intent_detection: 'enabled',
+      ai_enhancement: 'enabled',
+      semantic_search: 'ready'
     },
-    uptime: process.uptime()
+    stats: enhancedWsManager.getStats()
   };
 });
 
-// Database test route (FOR DEVELOPMENT ONLY)
-fastify.get('/api/v1/db/test', async (request, reply) => {
-  console.log(request)
+// Enhanced API Status
+fastify.get('/api/v1/status', async () => {
+  const wsStats = await enhancedWsManager.getDetailedStats();
+
+  return {
+    message: '🎤 Voice Todo API is running with AI!',
+    version: '2.0.0',
+    ai_provider: 'Google Gemini',
+    features: {
+      voice_processing: 'enabled',
+      real_time_transcription: 'enabled',
+      multi_language: 'enabled',
+      intent_detection: 'enabled',
+      voice_enhancement: 'enabled',
+      notion_integration: 'ready',
+      semantic_search: 'ready'
+    },
+    uptime: process.uptime(),
+    connections: {
+      active: wsStats.connections,
+      total_ever: wsStats.totalEver,
+      health: wsStats.healthStatus
+    },
+    supported_languages: ['en', 'es', 'fr', 'de', 'it', 'pt', 'hi', 'ja', 'ko', 'zh', 'ar']
+  };
+});
+
+// AI Service Status Endpoint
+fastify.get('/api/v1/ai/status', async () => {
   try {
-    // Fix: Properly create test user
-    const testUser = await fastify.userRepository.create({
-      email: `test-${Date.now()}@example.com`,
-      password: 'test123456',
-      name: 'Test User',
-      voice_preferences: {
-        language: 'en',
-        confidence_threshold: 0.8,
-        auto_create_todos: true,
-        voice_response_enabled: true,
-        preferred_accent: 'neutral'
-      },
-      usage_stats: {
-        total_todos_created: 0,
-        voice_minutes_processed: 0,
-        total_searches: 0
-      },
-      notion_integration: {},
-      is_active: true,
-      email_verified: false,
-      subscription_tier: 'free'
-    });
-
-    // Fix: Convert string ID to ObjectId properly
-    const userObjectId = new mongoose.Types.ObjectId(testUser._id.toString())
-
-    // Fix: Create test todo with proper ObjectId
-    const testTodo = await fastify.todoRepository.create({
-      user_id: userObjectId as any,
-      title: 'Test Voice Todo',
-      content: {
-        original_transcript: 'Create a test todo',
-        cleaned_text: 'Create a test todo',
-        confidence_score: 0.95,
-        detected_language: 'en',
-        translated_content: new Map()
-      },
-      audio_metadata: {
-        voice_response_generated: false,
-        audio_format: 'webm'
-      },
-      notion_data: {
-        sync_status: 'pending'
-      },
-      embedding: {
-        vector_generated: false,
-        embedding_model: 'text-embedding-004',
-        embedding_dimensions: 768
-      },
-      context: {
-        related_todos: []
-      },
-      processing_status: {
-        voice_processed: false,
-        notion_created: false,
-        embedding_generated: false,
-        voice_response_sent: false
-      },
-      priority: 'medium',
-      status: 'created',
-      tags: []
-    });
+    const geminiHealth = await geminiService.healthCheck();
 
     return {
-      message: 'Database test successful!',
-      user: {
-        id: testUser._id,
-        email: testUser.email,
-        name: testUser.name
-      },
-      todo: {
-        id: testTodo._id,
-        title: testTodo.title,
-        status: testTodo.status
-      }
+      provider: 'Google Gemini',
+      model: geminiHealth.model,
+      status: geminiHealth.status,
+      capabilities: [
+        'speech_to_text',
+        'text_enhancement',
+        'intent_detection',
+        'language_detection',
+        'embedding_generation'
+      ],
+      error: geminiHealth.error || null,
+      last_check: new Date().toISOString()
     };
   } catch (error) {
-    reply.status(500);
     return {
-      error: 'Database test failed',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      provider: 'Google Gemini',
+      status: 'error',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      last_check: new Date().toISOString()
     };
   }
 });
 
-// Serve the test HTML client
-fastify.get('/', async (request, reply) => {
-  reply.type('text/html');
-  console.log(request, "req")
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Voice Todo App</title>
-        <style>
-            body { 
-                font-family: Arial, sans-serif; 
-                max-width: 600px; 
-                margin: 50px auto; 
-                padding: 20px;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                text-align: center;
-            }
-            .card {
-                background: rgba(255,255,255,0.1);
-                padding: 30px;
-                border-radius: 15px;
-                backdrop-filter: blur(10px);
-            }
-            .links { margin-top: 30px; }
-            .links a {
-                display: inline-block;
-                margin: 10px;
-                padding: 12px 24px;
-                background: rgba(255,255,255,0.2);
-                color: white;
-                text-decoration: none;
-                border-radius: 25px;
-                transition: all 0.3s ease;
-            }
-            .links a:hover {
-                background: rgba(255,255,255,0.3);
-                transform: translateY(-2px);
-            }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>🎤 Voice Todo App</h1>
-            <p>Your AI-powered voice todo assistant</p>
-            <div class="links">
-                <a href="/health">Health Check</a>
-                <a href="/api/v1/status">API Status</a>
-                <a href="/api/v1/db/test">Test Database</a>
-            </div>
-            <div style="margin-top: 30px;">
-                <h3>🎙️ Voice Features</h3>
-                <p>WebSocket endpoint: <code>ws://localhost:${config.port}/ws/voice</code></p>
-                <p style="font-size: 14px; opacity: 0.8;">
-                    Use the WebSocket endpoint to connect your voice client
-                </p>
-            </div>
-        </div>
-    </body>
-    </html>
-  `;
+// Test AI Transcription Endpoint
+// Enhanced test endpoint in src/app.ts
+fastify.post('/api/v1/ai/test-transcription', async (request, reply) => {
+  try {
+    // Get text from request body or use default
+    const { text, language } = (request.body as any) || {};
+    const testText = text || "Add buy groceries to my todo list for tomorrow";
+    const testLanguage = language || 'en';
+
+    // Test enhancement
+    const enhanced = await geminiService.enhanceTranscription(testText, testLanguage);
+
+    // Test language detection
+    const detectedLang = await geminiService.detectLanguage(testText);
+
+    return {
+      success: true,
+      original_text: testText,
+      enhanced_result: enhanced,
+      detected_language: detectedLang,
+      processing_time: Date.now(),
+      ai_provider: 'Google Gemini'
+    };
+
+  } catch (error) {
+    reply.status(500);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'AI test failed',
+      ai_provider: 'Google Gemini'
+    };
+  }
 });
 
-// WebSocket route for voice processing
+// Enhanced Home Page
+fastify.get('/', async () => {
+  const wsStats = enhancedWsManager.getStats();
+
+  return {
+    message: '🎤 Voice Todo App with AI is running!',
+    version: '2.0.0',
+    ai_powered: true,
+    provider: 'Google Gemini',
+    endpoints: {
+      health: '/health',
+      api_status: '/api/v1/status',
+      ai_status: '/api/v1/ai/status',
+      test_ai: '/api/v1/ai/test-transcription',
+      websocket: 'ws://localhost:3000/ws/voice'
+    },
+    features: [
+      '🎤 Real-time voice transcription',
+      '🤖 AI-powered intent detection',
+      '🌍 Multi-language support',
+      '✨ Voice enhancement',
+      '📝 Smart todo creation',
+      '🔍 Semantic search (ready)'
+    ],
+    stats: {
+      active_connections: wsStats.activeConnections,
+      total_connections: wsStats.totalConnections,
+      ai_transcriptions: wsStats.totalTranscriptions
+    }
+  };
+});
+
+// Enhanced WebSocket with Real Gemini AI
 fastify.register(async function (fastify) {
   fastify.get('/ws/voice', { websocket: true }, (connection, req) => {
-    // Use the WebSocket manager to handle the connection
-    const connectionId = wsManager.handleConnection(connection.socket);
+    // Extract user info from request
+    const userInfo = {
+      userAgent: req.headers['user-agent'] || 'Unknown',
+      userId: req.headers['x-user-id'] as string || undefined,
+      ip: req.ip
+    } as any
 
-    logger.info(`🎤 Voice WebSocket established: ${connectionId}`);
+    // Use enhanced WebSocket manager with Gemini integration
+    const connectionId = enhancedWsManager.handleConnection(connection.socket, userInfo);
 
-    // Optional: Log user info if available
-    const userAgent = req.headers['user-agent'] || 'Unknown';
-    logger.info(`📱 Client: ${userAgent}`);
+    logger.info(`🎤 Enhanced Voice WebSocket with AI established`, {
+      connectionId,
+      userAgent: userInfo.userAgent,
+      activeConnections: enhancedWsManager.getActiveConnections()
+    });
   });
+});
+
+// WebSocket Stats Endpoint
+fastify.get('/api/v1/websocket/stats', async () => {
+  const detailedStats = await enhancedWsManager.getDetailedStats();
+  return {
+    success: true,
+    timestamp: new Date().toISOString(),
+    ...detailedStats
+  };
+});
+
+// System Update Broadcast Endpoint (for admin use)
+fastify.post('/api/v1/admin/broadcast', async (request, reply) => {
+  try {
+    const { type, message, severity } = request.body as any;
+
+    await enhancedWsManager.broadcastSystemUpdate({
+      type: type || 'system_alert',
+      message: message || 'System update',
+      severity: severity || 'info'
+    });
+
+    return {
+      success: true,
+      message: 'Broadcast sent to all connected clients',
+      connections: enhancedWsManager.getActiveConnections()
+    };
+  } catch (error) {
+    reply.status(500);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Broadcast failed'
+    };
+  }
 });
 
 // Error handler
 fastify.setErrorHandler((error, request, reply) => {
-  console.log(request, 'Request error:', error);
   logger.error('Request error:', error);
 
   reply.status(error.statusCode || 500).send({
     error: {
       message: error.message,
       statusCode: error.statusCode || 500,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      ai_provider: 'Google Gemini'
     }
   });
 });
 
-// Graceful shutdown
+// Enhanced graceful shutdown
 const gracefulShutdown = async (signal: string): Promise<void> => {
   logger.info(`Received ${signal}, shutting down gracefully...`);
 
   try {
-    // Shutdown WebSocket manager first
-    wsManager.shutdown();
+    // Shutdown WebSocket manager first (sends shutdown notices to clients)
+    enhancedWsManager.shutdown();
+
+    // Wait a bit for clients to disconnect gracefully
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
     await fastify.close();
     await dbManager.disconnect();
-    logger.info('Server closed successfully');
+
+    logger.info('✅ Enhanced server shutdown complete');
     process.exit(0);
   } catch (error) {
     logger.error('Error during shutdown:', error);
@@ -300,7 +300,6 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Start server
 const start = async (): Promise<void> => {
   try {
     const address = await fastify.listen({
@@ -308,12 +307,14 @@ const start = async (): Promise<void> => {
       host: config.host
     });
 
-    logger.info(`🚀 Voice Todo App server is running!`);
+    logger.info(`🚀 Enhanced Voice Todo App with AI is running!`);
+    logger.info(`🤖 AI Provider: Google Gemini`);
     logger.info(`📡 Server listening on ${address}`);
     logger.info(`🌍 Environment: ${config.node_env}`);
-    logger.info(`🎤 WebSocket endpoint: ws://localhost:${config.port}/ws/voice`);
+    logger.info(`🎤 Enhanced WebSocket: ws://localhost:${config.port}/ws/voice`);
     logger.info(`💊 Health check: http://localhost:${config.port}/health`);
-    logger.info(`🏠 Home page: http://localhost:${config.port}/`);
+    logger.info(`🧠 AI Status: http://localhost:${config.port}/api/v1/ai/status`);
+    logger.info(`🏠 Home: http://localhost:${config.port}/`);
 
   } catch (error) {
     logger.error('Error starting server:', error);
@@ -322,5 +323,3 @@ const start = async (): Promise<void> => {
 };
 
 start().catch(console.error);
-
-export default fastify;
