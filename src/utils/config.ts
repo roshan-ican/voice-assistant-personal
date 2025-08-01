@@ -1,17 +1,13 @@
-// src/utils/config.js
+// src/utils/config.ts
 import dotenv from 'dotenv';
+import type { AppConfig } from '@/types/index.js';
+
 dotenv.config();
 
-// Helper function to safely parse integers
-function parseEnvInt(value, fallback) {
-    const parsed = parseInt(value);
-    return isNaN(parsed) ? fallback : parsed;
-}
-
-export const config = {
+export const config: AppConfig = {
     // Server
     node_env: process.env.NODE_ENV || 'development',
-    port: parseEnvInt(process.env.PORT, 3000),
+    port: parseInt(process.env.PORT || '3000'),
     host: process.env.HOST || '0.0.0.0',
 
     // Database
@@ -22,8 +18,8 @@ export const config = {
     // Redis
     redis: {
         host: process.env.REDIS_HOST || 'localhost',
-        port: parseEnvInt(process.env.REDIS_PORT, 6379),
-        password: process.env.REDIS_PASSWORD || null
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+        ...(process.env.REDIS_PASSWORD && { password: process.env.REDIS_PASSWORD })
     },
 
     // API Keys
@@ -33,7 +29,7 @@ export const config = {
         notion: process.env.NOTION_API_KEY || '',
         pinecone: {
             apiKey: process.env.PINECONE_API_KEY || '',
-            environment: process.env.PINECONE_ENVIRONMENT || ''
+            environment: "us-west1-gcp-free"
         }
     },
 
@@ -50,13 +46,33 @@ export const config = {
 
     // Rate Limiting
     rateLimit: {
-        max: parseEnvInt(process.env.RATE_LIMIT_MAX, 100),
-        window: parseEnvInt(process.env.RATE_LIMIT_WINDOW, 15 * 60 * 1000) // 15 minutes
+        max: parseInt(process.env.RATE_LIMIT_MAX || '100'),
+        window: parseInt(process.env.RATE_LIMIT_WINDOW || '900000') // 15 minutes
     },
 
     // File Upload
     upload: {
-        maxFileSize: parseEnvInt(process.env.MAX_FILE_SIZE, 10 * 1024 * 1024), // 10MB
+        maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760'), // 10MB
         uploadDir: process.env.UPLOAD_DIR || './uploads'
     }
+};
+
+
+// Validation
+const requiredEnvVars = [
+    'GEMINI_API_KEY',
+    'ELEVENLABS_API_KEY',
+    'NOTION_API_KEY',
+    'PINECONE_API_KEY',
+] as const;
+
+export const validateConfig = (): boolean => {
+    const missing = requiredEnvVars.filter(envVar => !process.env[envVar]);
+
+    if (missing.length > 0) {
+        throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+    }
+
+    console.log('✅ Configuration validated successfully');
+    return true;
 };
