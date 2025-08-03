@@ -14,74 +14,51 @@ async function notionRoutes(fastify: FastifyInstance) {
     const addTodoToPage = notionController.addTodoToPage.bind(notionController);
     const createTodoPage = notionController.createTodoPage.bind(notionController);
     const deletePage = notionController.deletePage.bind(notionController);
+    const updateTodo = notionController.updateTodo.bind(notionController)
+    const getPageTodos = notionController.getPageTodos.bind(notionController);
+    const getBlockInfo = notionController.getBlockInfo.bind(notionController);
+    const getAllTodosRecursive = notionController.getAllTodosRecursive.bind(notionController);
 
     // Get a specific page
     fastify.get('/notes/:id', {
-        schema: {
-            // params: {
-            //     type: 'object',
-            //     properties: {
-            //         id: { type: 'string' }
-            //     },
-            //     required: ['id']
-            // },
 
-        }
     }, getPage);
 
     // Get all recent pages
     fastify.get('/notes', {
-        schema: {
-            // querystring: {
-            //     type: 'object',
-            //     properties: {
-            //         limit: { type: 'number', default: 10 },
-            //         offset: { type: 'number', default: 0 }
-            //     }
-            // },
-            // response: {
-            //     200: {
-            //         type: 'object',
-            //         properties: {
-            //             success: { type: 'boolean' },
-            //             endpoint: { type: 'string' },
-            //             count: { type: 'number' },
-            //             notes: {
-            //                 type: 'array',
-            //                 items: {
-            //                     type: 'object',
-            //                     properties: {
-            //                         id: { type: 'string' },
-            //                         title: { type: 'string' },
-            //                         language: { type: 'string' },
-            //                         createdAt: { type: 'string' },
-            //                         url: { type: ['string', 'null'] }
-            //                     }
-            //                 }
-            //             }
-            //         }
-            //     }
-            // }
-        }
+
     }, getRecentPages);
 
     // Add todo to existing page
     fastify.post('/notes/:id/todos', {
+
+    }, addTodoToPage);
+
+    // Create new page with todos
+    fastify.post('/create-todo-page', {
+
+    }, createTodoPage);
+
+    // Delete a page
+    fastify.delete('/notes/:id', {
+    }, deletePage);
+
+    // Update a todo (mark as complete/incomplete)
+    fastify.patch('/todos/:blockId', {
         schema: {
             params: {
                 type: 'object',
                 properties: {
-                    id: { type: 'string' }
+                    blockId: { type: 'string' }
                 },
-                required: ['id']
+                required: ['blockId']
             },
             body: {
                 type: 'object',
                 properties: {
-                    text: { type: 'string' },
-                    checked: { type: 'boolean', default: false }
-                },
-                required: ['text']
+                    checked: { type: 'boolean' },
+                    text: { type: 'string' }
+                }
             },
             response: {
                 200: {
@@ -92,46 +69,19 @@ async function notionRoutes(fastify: FastifyInstance) {
                         data: {
                             type: 'object',
                             properties: {
-                                pageId: { type: 'string' },
-                                todoText: { type: 'string' },
-                                checked: { type: 'boolean' },
-                                blockId: { type: 'string' }
+                                blockId: { type: 'string' },
+                                checked: { type: ['boolean', 'null'] },
+                                text: { type: ['string', 'null'] }
                             }
                         }
                     }
                 }
             }
         }
-    }, addTodoToPage);
+    }, updateTodo);
 
-    // Create new page with todos
-    fastify.post('/create-todo-page', {
-        // schema: {
-        //     body: {
-        //         type: 'object',
-        //         properties: {
-        //             title: { type: 'string' },
-        //             todos: {
-        //                 type: 'array',
-        //                 items: {
-        //                     type: 'object',
-        //                     properties: {
-        //                         text: { type: 'string' },
-        //                         checked: { type: 'boolean', default: false }
-        //                     },
-        //                     required: ['text']
-        //                 },
-        //                 default: []
-        //             },
-        //             language: { type: 'string', default: 'en' }
-        //         }
-        //     },
-         
-        // }
-    }, createTodoPage);
-
-    // Delete a page
-    fastify.delete('/notes/:id', {
+    // Get all todos from a page
+    fastify.get('/notes/:id/todos', {
         schema: {
             params: {
                 type: 'object',
@@ -145,12 +95,98 @@ async function notionRoutes(fastify: FastifyInstance) {
                     type: 'object',
                     properties: {
                         success: { type: 'boolean' },
-                        message: { type: 'string' }
+                        pageId: { type: 'string' },
+                        todos: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                properties: {
+                                    id: { type: 'string' },
+                                    text: { type: 'string' },
+                                    checked: { type: 'boolean' },
+                                    createdTime: { type: 'string' },
+                                    lastEditedTime: { type: 'string' }
+                                }
+                            }
+                        },
+                        totalTodos: { type: 'number' },
+                        completedTodos: { type: 'number' }
                     }
                 }
             }
         }
-    }, deletePage);
+    }, getPageTodos);
+
+    // Debug: Get block info
+    fastify.get('/blocks/:blockId/info', {
+        schema: {
+            params: {
+                type: 'object',
+                properties: {
+                    blockId: { type: 'string' }
+                },
+                required: ['blockId']
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        blockInfo: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                type: { type: 'string' },
+                                hasChildren: { type: 'boolean' },
+                                createdTime: { type: 'string' },
+                                lastEditedTime: { type: 'string' },
+                                content: { type: ['object', 'null'] }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }, getBlockInfo);
+
+    // Get all todos recursively (including child pages)
+    fastify.get('/notes/:id/todos/all', {
+        schema: {
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string' }
+                },
+                required: ['id']
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        pageId: { type: 'string' },
+                        todos: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                properties: {
+                                    id: { type: 'string' },
+                                    text: { type: 'string' },
+                                    checked: { type: 'boolean' },
+                                    createdTime: { type: 'string' },
+                                    lastEditedTime: { type: 'string' },
+                                    parentPage: { type: 'string' },
+                                    parentPageId: { type: 'string' }
+                                }
+                            }
+                        },
+                        totalTodos: { type: 'number' },
+                        completedTodos: { type: 'number' }
+                    }
+                }
+            }
+        }
+    }, getAllTodosRecursive);
 }
 
 export default notionRoutes;

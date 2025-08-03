@@ -20,8 +20,33 @@ interface CreateTodoPageBody {
     parentPageId?: string;        // ← add
     parentDatabaseId?: string;    // ← add
 }
+
+interface UpdateTodoBody {
+    checked?: boolean;
+    text?: string;
+}
 export class NotionController {
     constructor(private notionService: NotionService) { }
+
+    // Helper method to clean page IDs
+    private cleanPageId(id: string): string {
+        let cleanId = id;
+        if (id.includes('Voice-Roshan-Notes-')) {
+            cleanId = id.replace('Voice-Roshan-Notes-', '');
+        }
+
+        if (cleanId.length === 32 && !cleanId.includes('-')) {
+            cleanId = [
+                cleanId.slice(0, 8),
+                cleanId.slice(8, 12),
+                cleanId.slice(12, 16),
+                cleanId.slice(16, 20),
+                cleanId.slice(20, 32)
+            ].join('-');
+        }
+
+        return cleanId;
+    }
 
     // Get a specific page by ID
     async getPage(request: FastifyRequest<{ Params: GetPageParams }>, reply: FastifyReply) {
@@ -271,4 +296,209 @@ export class NotionController {
             });
         }
     }
+
+    // Update/toggle a todo
+    // Update/toggle a todo
+    async updateTodo(
+        request: FastifyRequest<{ Params: { blockId: string }; Body: UpdateTodoBody }>,
+        reply: FastifyReply
+    ) {
+        try {
+            const { blockId } = request.params;
+            const { checked, text } = request.body;
+
+            // First, let's verify this is actually a todo block
+            const block = await (this.notionService as any).notion.blocks.retrieve({
+                block_id: blockId
+            });
+            console.log(block, "___block")
+
+            if (block.type !== 'to_do') {
+                return reply.code(400).send({
+                    success: false,
+                    error: 'Block is not a todo item',
+                    blockType: block.type
+                });
+            }
+
+            const updateData: any = {
+                to_do: {}
+            };
+
+            if (checked !== undefined) {
+                updateData.to_do.checked = checked;
+            }
+
+            if (text !== undefined) {
+                updateData.to_do.rich_text = [
+                    {
+                        type: 'text',
+                        text: {
+                            content: text
+                        }
+                    }
+                ];
+            }
+
+            await (this.notionService as any).notion.blocks.update({
+                block_id: blockId,
+                ...updateData
+            });
+
+            return {
+                success: true,
+                message: 'Todo updated successfully',
+                data: {
+                    blockId,
+                    checked,
+                    text,
+                    previousChecked: block.to_do.checked
+                }
+            };
+
+        } catch (error) {
+            request.log.error('Error updating todo:', error);
+            reply.code(500).send({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to update todo'
+            });
+        }
+    }
+
+    // Get all todos from a page (including child pages)
+    async getPageTodos(request: FastifyRequest<{ Params: GetPageParams }>, reply: FastifyReply) {
+        try {
+            const { id } = request.params;
+            const cleanId = this.cleanPageId(id);
+
+            // Get all blocks from the page
+            const blocks = await (this.notionService as any).notion.blocks.children.list({
+                block_id: cleanId,
+                page_size: 100
+            });
+
+            // Filter only todo blocks
+            const todos = blocks.results
+                .filter((block: any) => block.type === 'to_do')
+                .map((block: any) => ({
+                    id: block.id,
+                    text: block.to_do.rich_text[0]?.plain_text || '',
+                    checked: block.to_do.checked,
+                    createdTime: block.created_time,
+                    lastEditedTime: block.last_edited_time
+                }));
+
+            // Also get child pages
+            const childPages = blocks.results
+                .filter((block: any) => block.type === 'child_page')
+                .map((block: any) => ({
+                    id: block.id,
+                    title: block.child_page.title,
+                    type: 'child_page'
+                }));
+
+            return {
+                success: true,
+                pageId: cleanId,
+                todos,
+                childPages,
+                totalTodos: todos.length,
+                completedTodos: todos.filter((t: any) => t.checked).length,
+                message: todos.length === 0 && childPages.length > 0
+                    ? 'No todos found in this page. Todos might be in child pages listed above.'
+                    : undefined
+            };
+
+        } catch (error) {
+            request.log.error('Error getting todos:', error);
+            reply.code(500).send({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to get todos'
+            });
+        }
+    }
+
+    // Get all todos recursively (including from child pages)
+    async getAllTodosRecursive(request: FastifyRequest<{ Params: GetPageParams }>, reply: FastifyReply) {
+        try {
+            const { id } = request.params;
+            const cleanId = this.cleanPageId(id);
+
+            const allTodos: any[] = [];
+
+            // Recursive function to get todos
+            const getTodosFromPage = async (pageId: string, pagePath: string = '') => {
+                const blocks = await (this.notionService as any).notion.blocks.children.list({
+                    block_id: pageId,
+                    page_size: 100
+                });
+
+                for (const block of blocks.results) {
+                    if (block.type === 'to_do') {
+                        allTodos.push({
+                            id: block.id,
+                            text: block.to_do.rich_text[0]?.plain_text || '',
+                            checked: block.to_do.checked,
+                            createdTime: block.created_time,
+                            lastEditedTime: block.last_edited_time,
+                            parentPage: pagePath || 'Main Page',
+                            parentPageId: pageId
+                        });
+                    } else if (block.type === 'child_page') {
+                        // Recursively get todos from child pages
+                        const childPageTitle = block.child_page.title;
+                        await getTodosFromPage(block.id, pagePath ? `${pagePath} > ${childPageTitle}` : childPageTitle);
+                    }
+                }
+            };
+
+            await getTodosFromPage(cleanId);
+
+            return {
+                success: true,
+                pageId: cleanId,
+                todos: allTodos,
+                totalTodos: allTodos.length,
+                completedTodos: allTodos.filter(t => t.checked).length
+            };
+
+        } catch (error) {
+            request.log.error('Error getting todos recursively:', error);
+            reply.code(500).send({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to get todos'
+            });
+        }
+    }
+
+    // Debug endpoint to check block type
+    async getBlockInfo(request: FastifyRequest<{ Params: { blockId: string } }>, reply: FastifyReply) {
+        try {
+            const { blockId } = request.params;
+
+            const block = await (this.notionService as any).notion.blocks.retrieve({
+                block_id: blockId
+            });
+
+            return {
+                success: true,
+                blockInfo: {
+                    id: block.id,
+                    type: block.type,
+                    hasChildren: block.has_children,
+                    createdTime: block.created_time,
+                    lastEditedTime: block.last_edited_time,
+                    content: block[block.type] || null
+                }
+            };
+
+        } catch (error) {
+            request.log.error('Error getting block info:', error);
+            reply.code(500).send({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to get block info'
+            });
+        }
+    }
+
 }
