@@ -266,6 +266,7 @@ export interface AppConfig {
         pinecone: {
             apiKey: string;
             environment: string;
+            index: string;
         };
     };
     jwt: {

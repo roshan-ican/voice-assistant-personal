@@ -352,3 +352,51 @@ export class GeminiService {
         }
     }
 }
+
+
+
+export class EnhancedGeminiService {
+    private genAI: GoogleGenerativeAI;
+    private textModel: any;
+    private embeddingModel: any;
+
+    constructor(apiKey: string) {
+        this.genAI = new GoogleGenerativeAI(apiKey);
+        this.textModel = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+        this.embeddingModel = this.genAI.getGenerativeModel({ model: 'embedding-001' });
+    }
+
+    async enhanceText(text: string): Promise<string> {
+        const prompt = `
+      Enhance the following transcribed text by:
+      1. Fixing grammar and punctuation
+      2. Adding proper formatting
+      3. Maintaining the original meaning
+      4. Making it more readable
+      
+      Original text: ${text}
+      
+      Enhanced text:
+    `;
+
+        const result = await this.textModel.generateContent(prompt);
+        return result.response.text();
+    }
+
+    async generateEmbeddings(text: string): Promise<number[]> {
+        const result = await this.embeddingModel.embedContent(text);
+        return result.embedding.values;
+    }
+
+    async detectLanguage(text: string): Promise<string> {
+        const prompt = `Detect the language of this text and return only the ISO 639-1 language code: "${text}"`;
+        const result = await this.textModel.generateContent(prompt);
+        return result.response.text().trim();
+    }
+
+    async summarize(text: string): Promise<string> {
+        const prompt = `Provide a concise summary of the following text in 2-3 sentences: "${text}"`;
+        const result = await this.textModel.generateContent(prompt);
+        return result.response.text();
+    }
+}

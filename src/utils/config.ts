@@ -8,7 +8,7 @@ export const config: AppConfig = {
     // Server
     node_env: process.env.NODE_ENV || 'development',
     port: parseInt(process.env.PORT || '3000'),
-    host: process.env.HOST || '0.0.0.0',
+    host: 'localhost',
 
     // Database
     mongodb: {
@@ -29,7 +29,8 @@ export const config: AppConfig = {
         notion: process.env.NOTION_API_KEY || '',
         pinecone: {
             apiKey: process.env.PINECONE_API_KEY || '',
-            environment: "us-west1-gcp-free"
+            environment: "us-west1-gcp-free",
+            index: "notion-todos"
         }
     },
 
