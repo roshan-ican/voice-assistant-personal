@@ -13,6 +13,7 @@ import { NotionService } from './services/notionService.js';
 import { PineconeService } from './services/pineconeService.js';
 import { setupSimpleVoiceWebSocket } from './handler/simpleNotion.js';
 import notionRoutes from './routes/notionRoutes.js';
+import voiceQueryRoutes from './routes/voiceQueryRoutes.js';
 
 validateConfig();
 
@@ -112,6 +113,8 @@ fastify.get('/health', async () => {
 
 
 await fastify.register(notionRoutes, { prefix: '/api/v1' });
+
+await fastify.register(voiceQueryRoutes, { prefix: 'api/v1' })
 
 
 

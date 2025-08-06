@@ -1,6 +1,7 @@
 // routes/notionRoutes.ts
 
 import { NotionController } from '@/handler/notionHandlers';
+import { getAllTodosRecursiveSchema, getBlockInfoSchema, getPageTodosSchema, updateTodoSchema } from '@/schema/notionSchemas';
 import { FastifyInstance } from 'fastify';
 
 
@@ -43,150 +44,13 @@ async function notionRoutes(fastify: FastifyInstance) {
     fastify.delete('/notes/:id', {
     }, deletePage);
 
-    // Update a todo (mark as complete/incomplete)
-    fastify.patch('/todos/:blockId', {
-        schema: {
-            params: {
-                type: 'object',
-                properties: {
-                    blockId: { type: 'string' }
-                },
-                required: ['blockId']
-            },
-            body: {
-                type: 'object',
-                properties: {
-                    checked: { type: 'boolean' },
-                    text: { type: 'string' }
-                }
-            },
-            response: {
-                200: {
-                    type: 'object',
-                    properties: {
-                        success: { type: 'boolean' },
-                        message: { type: 'string' },
-                        data: {
-                            type: 'object',
-                            properties: {
-                                blockId: { type: 'string' },
-                                checked: { type: ['boolean', 'null'] },
-                                text: { type: ['string', 'null'] }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }, updateTodo);
+    fastify.patch('/todos/:blockId', { schema: updateTodoSchema }, updateTodo);
 
-    // Get all todos from a page
-    fastify.get('/notes/:id/todos', {
-        schema: {
-            params: {
-                type: 'object',
-                properties: {
-                    id: { type: 'string' }
-                },
-                required: ['id']
-            },
-            response: {
-                200: {
-                    type: 'object',
-                    properties: {
-                        success: { type: 'boolean' },
-                        pageId: { type: 'string' },
-                        todos: {
-                            type: 'array',
-                            items: {
-                                type: 'object',
-                                properties: {
-                                    id: { type: 'string' },
-                                    text: { type: 'string' },
-                                    checked: { type: 'boolean' },
-                                    createdTime: { type: 'string' },
-                                    lastEditedTime: { type: 'string' }
-                                }
-                            }
-                        },
-                        totalTodos: { type: 'number' },
-                        completedTodos: { type: 'number' }
-                    }
-                }
-            }
-        }
-    }, getPageTodos);
+    fastify.get('/notes/:id/todos', { schema: getPageTodosSchema }, getPageTodos);
 
-    // Debug: Get block info
-    fastify.get('/blocks/:blockId/info', {
-        schema: {
-            params: {
-                type: 'object',
-                properties: {
-                    blockId: { type: 'string' }
-                },
-                required: ['blockId']
-            },
-            response: {
-                200: {
-                    type: 'object',
-                    properties: {
-                        success: { type: 'boolean' },
-                        blockInfo: {
-                            type: 'object',
-                            properties: {
-                                id: { type: 'string' },
-                                type: { type: 'string' },
-                                hasChildren: { type: 'boolean' },
-                                createdTime: { type: 'string' },
-                                lastEditedTime: { type: 'string' },
-                                content: { type: ['object', 'null'] }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }, getBlockInfo);
+    fastify.get('/blocks/:blockId/info', { schema: getBlockInfoSchema }, getBlockInfo);
 
-    // Get all todos recursively (including child pages)
-    fastify.get('/notes/:id/todos/all', {
-        schema: {
-            params: {
-                type: 'object',
-                properties: {
-                    id: { type: 'string' }
-                },
-                required: ['id']
-            },
-            response: {
-                200: {
-                    type: 'object',
-                    properties: {
-                        success: { type: 'boolean' },
-                        pageId: { type: 'string' },
-                        todos: {
-                            type: 'array',
-                            items: {
-                                type: 'object',
-                                properties: {
-                                    id: { type: 'string' },
-                                    text: { type: 'string' },
-                                    checked: { type: 'boolean' },
-                                    createdTime: { type: 'string' },
-                                    lastEditedTime: { type: 'string' },
-                                    parentPage: { type: 'string' },
-                                    parentPageId: { type: 'string' }
-                                }
-                            }
-                        },
-                        totalTodos: { type: 'number' },
-                        completedTodos: { type: 'number' }
-                    }
-                }
-            }
-        }
-    }, getAllTodosRecursive);
+    fastify.get('/notes/:id/todos/all', { schema: getAllTodosRecursiveSchema }, getAllTodosRecursive);
 }
 
 export default notionRoutes;

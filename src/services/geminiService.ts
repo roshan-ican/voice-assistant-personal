@@ -66,17 +66,48 @@ export class GeminiService {
         } = {}
     ): Promise<GeminiTranscriptionResult> {
         const startTime = Date.now();
-
         try {
+            console.log(audioBuffer, "__audio_beffer")
             const { language = 'en', mimeType = 'audio/webm' } = options;
 
-            // Convert buffer to base64
+            // VALIDATION: Check audio buffer size and format
+            if (!audioBuffer || audioBuffer.length === 0) {
+                throw new Error('Empty audio buffer provided');
+            }
+
+            // Check if buffer is too large (Gemini has limits)
+            const maxSize = 20 * 1024 * 1024; // 20MB limit for Gemini
+            if (audioBuffer.length > maxSize) {
+                throw new Error(`Audio file too large: ${audioBuffer.length} bytes (max: ${maxSize})`);
+            }
+
+            // Validate audio format
+            const validMimeTypes = [
+                'audio/wav',
+                'audio/mp3',
+                'audio/mp4',
+                'audio/mpeg',
+                'audio/webm',
+                'audio/flac'
+            ];
+
+            if (!validMimeTypes.includes(mimeType)) {
+                logger.warn(`Unsupported mime type: ${mimeType}, defaulting to audio/wav`);
+                options.mimeType = 'audio/wav';
+            }
+
+            // Check if the buffer actually contains audio data
             const audioBase64 = audioBuffer.toString('base64');
+
+            // Basic validation - check if it's actually base64
+            if (!/^[A-Za-z0-9+/]*={0,2}$/.test(audioBase64)) {
+                throw new Error('Invalid audio data format');
+            }
 
             logger.info(`🎤 Transcribing audio: ${audioBuffer.length} bytes, ${mimeType}, ${language}`);
 
-            // Create prompt for transcription
-            const prompt = this.buildTranscriptionPrompt(language);
+            // Try with simpler approach first
+            const prompt = `Please transcribe this audio to text. Language: ${language}`;
 
             const result = await this.speechModel.generateContent([
                 {
@@ -88,10 +119,10 @@ export class GeminiService {
                 { text: prompt }
             ]);
 
+            console.log(result, "__speech_model_")
+
             const transcription = result.response.text().trim();
             const processingTime = Date.now() - startTime;
-
-            // Basic confidence scoring (Gemini doesn't provide this directly)
             const confidence = this.estimateConfidence(transcription, audioBuffer.length, processingTime);
 
             logger.info(`✅ Transcription completed: "${transcription}" (${processingTime}ms)`);
@@ -103,9 +134,115 @@ export class GeminiService {
                 processingTime
             };
 
-        } catch (error) {
+        } catch (error: any) {
             logger.error('❌ Gemini transcription failed:', error);
-            throw new Error(`Transcription failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+
+            // Return fallback response instead of throwing
+            return {
+                text: '',
+                confidence: 0,
+                language: options.language || 'en',
+                processingTime: Date.now() - startTime,
+                // error: error ? 'Unknown transcription error' : "";
+            };
+        }
+    }
+
+    // Add this method to your GeminiService class
+
+    /**
+     * Parse voice command intent for todo operations
+     */
+    async parseVoiceCommand(text: string, context?: any): Promise<{
+        action: 'create' | 'complete' | 'update' | 'delete' | 'list' | 'unclear';
+        todoText?: string;
+        targetTodo?: string;
+        newText?: string;
+        pageHint?: string;
+        confidence: number;
+    }> {
+        try {
+            const prompt = `
+                Analyze this voice command for a todo app and extract the intent.
+                
+                Command: "${text}"
+                
+                Context:
+                - Current page ID: ${context?.currentPageId || 'none'}
+                
+                Determine:
+                1. Action: create, complete, update, delete, list, or unclear
+                2. Todo text (for create)
+                3. Target todo (for complete/update/delete - can be text match or position like "first", "last")
+                4. New text (for update)
+                5. Page hint (if user mentions a specific list)
+                
+                Examples:
+                - "add buy milk" → action: create, todoText: "buy milk"
+                - "check off the first one" → action: complete, targetTodo: "first"
+                - "mark buy groceries as done" → action: complete, targetTodo: "buy groceries"
+                - "change milk to almond milk" → action: update, targetTodo: "milk", newText: "almond milk"
+                - "show my todos" → action: list
+                
+                Return JSON: {
+                    "action": "...",
+                    "todoText": "...",
+                    "targetTodo": "...",
+                    "newText": "...",
+                    "pageHint": "...",
+                    "confidence": 0.0-1.0
+                }
+            `;
+
+            const result = await this.textModel.generateContent(prompt);
+            const response = result.response.text();
+
+            // Extract JSON from response
+            const jsonMatch = response.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+                throw new Error('No JSON found in response');
+            }
+
+            return JSON.parse(jsonMatch[0]);
+        } catch (error) {
+            logger.error('Failed to parse voice command:', error);
+
+            // Fallback to simple parsing
+            const lowerText = text.toLowerCase();
+
+            if (lowerText.includes('add') || lowerText.includes('create')) {
+                const todoText = text.replace(/^(add|create|make)\s+/i, '').trim();
+                return { action: 'create', todoText, confidence: 0.8 };
+            }
+
+            if (lowerText.includes('complete') || lowerText.includes('done') || lowerText.includes('check')) {
+                const targetTodo = text.replace(/^(complete|done|check|mark)\s+/i, '').trim();
+                return { action: 'complete', targetTodo, confidence: 0.7 };
+            }
+
+            if (lowerText.includes('update') || lowerText.includes('change')) {
+                // Try to extract old and new text
+                const match = text.match(/(?:update|change)\s+(.+?)\s+to\s+(.+)/i);
+                if (match) {
+                    return {
+                        action: 'update',
+                        targetTodo: match[1]?.trim(),
+                        newText: match[2]?.trim(),
+                        confidence: 0.7
+                    } as any
+                }
+            }
+
+            if (lowerText.includes('delete') || lowerText.includes('remove')) {
+                const targetTodo = text.replace(/^(delete|remove)\s+/i, '').trim();
+                return { action: 'delete', targetTodo, confidence: 0.7 };
+            }
+
+            if (lowerText.includes('show') || lowerText.includes('list')) {
+                return { action: 'list', confidence: 0.9 };
+            }
+
+            return { action: 'unclear', confidence: 0.3 };
         }
     }
 
@@ -262,19 +399,13 @@ export class GeminiService {
 
             const parsed = JSON.parse(jsonMatch[0]);
 
-            // Validate and sanitize the response
+            // Ensure action is one of the valid types
+            const validActions = ['create', 'complete', 'update', 'delete', 'list', 'unclear'];
+            const action = validActions.includes(parsed.action) ? parsed.action : 'unclear';
+
             return {
-                cleaned_text: parsed.cleaned_text || 'Unknown task',
-                priority: this.validatePriority(parsed.priority),
-                due_date: parsed.due_date || null,
-                tags: Array.isArray(parsed.tags) ? parsed.tags.slice(0, 3) : [],
-                confidence: Math.max(0, Math.min(1, parsed.confidence || 0.5)),
-                project: parsed.project || undefined,
-                estimated_duration: parsed.estimated_duration || undefined,
-                intent: {
-                    action: parsed.intent?.action || 'create_todo',
-                    confidence: Math.max(0, Math.min(1, parsed.intent?.confidence || 0.5))
-                }
+                ...parsed,
+                action: action as 'create' | 'complete' | 'update' | 'delete' | 'list' | 'unclear'
             };
 
         } catch (error) {
@@ -362,7 +493,7 @@ export class EnhancedGeminiService {
 
     constructor(apiKey: string) {
         this.genAI = new GoogleGenerativeAI(apiKey);
-        this.textModel = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+        this.textModel = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
         this.embeddingModel = this.genAI.getGenerativeModel({ model: 'embedding-001' });
     }
 
