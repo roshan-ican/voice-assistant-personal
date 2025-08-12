@@ -3,6 +3,8 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { GeminiService } from '../services/geminiService.js';
 import { NotionService } from '../services/notionService.js';
 import { ElevenLabsService } from '@/services/elevenLabs.js';
+import { config } from '@/utils/config.js';
+
 
 interface VoiceQueryRequest {
     text?: string;
@@ -23,9 +25,10 @@ interface VoiceIntent {
 }
 
 export class VoiceQueryController {
+
     private elevenLabsService: ElevenLabsService;
     private gtdDatabaseId: string | null = null;
-    private FALLBACK_PAGE_ID = '23f0030a44018099b5d8e1239eadee83'; // Your fallback page
+    private FALLBACK_PAGE_ID = config.notion_db.uri; // Your fallback page
 
     constructor(
         private geminiService: GeminiService,
@@ -33,15 +36,13 @@ export class VoiceQueryController {
         elevenLabsApiKey: string
     ) {
         this.elevenLabsService = new ElevenLabsService(elevenLabsApiKey);
+        console.log(config.notion_db.uri, "db______")
     }
 
-    private isValidNotionId(id: string | undefined | null): boolean {
-        return !!id && /^[0-9a-f]{32}$/i.test(id.replace(/-/g, ''));
-    }
 
     // Create or get GTD database
+    // Create or get GTD database - Simplified schema
     private async ensureGTDDatabase(): Promise<string> {
-        // If we already have a database ID, return it
         if (this.gtdDatabaseId) {
             return this.gtdDatabaseId;
         }
@@ -49,7 +50,7 @@ export class VoiceQueryController {
         try {
             // First, try to find existing GTD database
             const searchResponse = await (this.notionService as any).notion.search({
-                query: 'Simple GTD Tasks',
+                query: 'Daily Tasks',
                 filter: {
                     value: 'database',
                     property: 'object'
@@ -57,12 +58,12 @@ export class VoiceQueryController {
             });
 
             if (searchResponse.results.length > 0) {
-                this.gtdDatabaseId = searchResponse.results[0].id as string;
+                this.gtdDatabaseId = searchResponse.results[0].id as string
                 return this.gtdDatabaseId;
             }
 
-            // If not found, create a new GTD database
-            console.log('Creating new GTD database...');
+            // Create a new simplified GTD database
+            console.log('Creating new Daily Tasks database...');
             const newDatabase = await (this.notionService as any).notion.databases.create({
                 parent: {
                     type: 'page_id',
@@ -72,7 +73,7 @@ export class VoiceQueryController {
                     {
                         type: 'text',
                         text: {
-                            content: 'Simple GTD Tasks'
+                            content: 'Daily Tasks'
                         }
                     }
                 ],
@@ -84,9 +85,7 @@ export class VoiceQueryController {
                         select: {
                             options: [
                                 { name: 'Todo', color: 'yellow' },
-                                { name: 'In Progress', color: 'blue' },
-                                { name: 'Done', color: 'green' },
-                                { name: 'Cancelled', color: 'red' }
+                                { name: 'Done', color: 'green' }
                             ]
                         }
                     },
@@ -99,39 +98,34 @@ export class VoiceQueryController {
                             ]
                         }
                     },
-                    'Due Date': {  // Due date
-                        date: {}
-                    },
-                    'Created': {  // Creation date
-                        created_time: {}
-                    },
                     'Category': {  // Simple categories
                         select: {
                             options: [
                                 { name: 'Work', color: 'blue' },
                                 { name: 'Personal', color: 'green' },
                                 { name: 'Shopping', color: 'yellow' },
-                                { name: 'Health', color: 'red' },
-                                { name: 'Learning', color: 'purple' },
+                                { name: 'Email', color: 'purple' },
                                 { name: 'Other', color: 'gray' }
                             ]
                         }
                     },
-                    'Notes': {  // Additional notes
-                        rich_text: {}
+                    'Date': {  // Date created/for
+                        date: {}
                     }
                 }
             });
 
-            this.gtdDatabaseId = newDatabase.id;
-            console.log('GTD database created successfully:', this.gtdDatabaseId);
-            return this.gtdDatabaseId as string
+            this.gtdDatabaseId = newDatabase.id as string
+            console.log('Daily Tasks database created successfully:', this.gtdDatabaseId)
+            return this.gtdDatabaseId;
 
         } catch (error) {
-            console.error('Error creating/finding GTD database:', error);
-            throw new Error('Failed to setup GTD database');
+            console.error('Error creating/finding database:', error);
+            throw new Error('Failed to setup database');
         }
     }
+
+
 
     async processVoiceCommand(
         request: FastifyRequest<{ Body: VoiceQueryRequest }>,
@@ -166,13 +160,18 @@ export class VoiceQueryController {
                 });
             }
 
-            // 2. Parse intent using Gemini
-            const intent = await this.geminiService.parseVoiceCommand(commandText, {});
+            // 2. Detect intent from text first (before using Gemini)
 
-            // 3. Ensure GTD database exists
+
+            // 3. Use Gemini for more complex parsing if needed
+            let intent = await this.geminiService.parseVoiceCommand(commandText, {});
+
+            console.log('Detected intent:', intent);
+
+            // 4. Ensure database exists
             const databaseId = await this.ensureGTDDatabase();
 
-            // 4. Execute the intent
+            // 5. Execute the intent
             let result;
             switch (intent.action) {
                 case 'create':
@@ -193,7 +192,7 @@ export class VoiceQueryController {
                 default:
                     result = {
                         success: false,
-                        message: "I didn't understand. Try: 'add task', 'complete task', 'show tasks'."
+                        message: "I didn't understand. Try: 'buy milk', 'bought milk', or 'show tasks'."
                     };
             }
 
@@ -205,15 +204,19 @@ export class VoiceQueryController {
                 databaseId
             };
 
-            // 5. Generate audio response if requested
+            // 6. Generate audio response if requested
+            // if (returnAudio && result.message) {
+            //     response.audioResponse = await this.generateAudioResponse(
+            //         result.message,
+            //         { voiceId, modelId }
+            //     );
+            // }
             if (returnAudio) {
                 response.audioResponse = await this.generateAudioResponse(result.message, {
                     ...(voiceId ? { voiceId } : {}),
                     ...(modelId ? { modelId } : {})
                 });
             }
-
-            return response;
 
             return response;
 
@@ -226,6 +229,7 @@ export class VoiceQueryController {
         }
     }
 
+
     private async handleCreateGTD(intent: VoiceIntent, originalText: string) {
         if (!intent.todoText) {
             return { success: false, message: "I didn't catch what task you want to add." };
@@ -237,7 +241,7 @@ export class VoiceQueryController {
             // Extract priority and category from text
             const priority = this.extractPriority(originalText);
             const category = this.extractCategory(originalText);
-            const dueDate = this.extractDueDate(originalText);
+
 
             const newTask = await (this.notionService as any).notion.pages.create({
                 parent: {
@@ -268,13 +272,6 @@ export class VoiceQueryController {
                             name: category
                         }
                     },
-                    ...(dueDate && {
-                        'Due Date': {
-                            date: {
-                                start: dueDate
-                            }
-                        }
-                    })
                 }
             });
 
@@ -405,63 +402,77 @@ export class VoiceQueryController {
 
         try {
             const databaseId = await this.ensureGTDDatabase();
+            let tasksToDelete;
 
-            // Find the task
-            const response = await (this.notionService as any).notion.databases.query({
-                database_id: databaseId,
-                filter: {
-                    property: 'Task',
-                    title: {
-                        contains: intent.targetTodo
+            // Check if the user wants to delete all tasks
+            if (intent.targetTodo.toLowerCase() === "all") {
+                const allTasksResponse = await (this.notionService as any).notion.databases.query({
+                    database_id: databaseId,
+                    // No filter means it will get all tasks
+                });
+                tasksToDelete = allTasksResponse.results;
+            } else {
+                // Find a specific task
+                const response = await (this.notionService as any).notion.databases.query({
+                    database_id: databaseId,
+                    filter: {
+                        property: 'Task',
+                        title: {
+                            contains: intent.targetTodo
+                        }
                     }
-                }
-            });
+                });
+                tasksToDelete = response.results;
+            }
 
-            if (response.results.length === 0) {
+            if (tasksToDelete.length === 0) {
                 return { success: false, message: `Couldn't find task "${intent.targetTodo}"` };
             }
 
-            const targetTask = response.results[0];
+            // Loop through and delete all the found tasks
+            const deletePromises = tasksToDelete.map((task: any) =>
+                (this.notionService as any).notion.pages.update({
+                    page_id: task.id,
+                    archived: true
+                })
+            );
 
-            // Archive the page
-            await (this.notionService as any).notion.pages.update({
-                page_id: targetTask.id,
-                archived: true
-            });
+            await Promise.all(deletePromises);
 
-            const taskName = targetTask.properties.Task?.title[0]?.plain_text || intent.targetTodo;
-            return {
-                success: true,
-                message: `🗑️ Deleted "${taskName}"`,
-                taskId: targetTask.id
-            };
+            // Customize the success message based on what was deleted
+            const message = intent.targetTodo.toLowerCase() === "all"
+                ? `🗑️ Deleted all ${tasksToDelete.length} tasks`
+                : `🗑️ Deleted "${tasksToDelete[0].properties.Task?.title[0]?.plain_text || intent.targetTodo}"`;
+
+            return { success: true, message: message };
+
         } catch (error) {
             console.error('Error deleting task:', error);
             return { success: false, message: 'Failed to delete task' };
         }
     }
-
     private async handleListGTD() {
         try {
             const databaseId = await this.ensureGTDDatabase();
+            const today = new Date().toISOString().split('T')[0];
 
-            // Query active tasks
+            // Query today's tasks
             const response = await (this.notionService as any).notion.databases.query({
                 database_id: databaseId,
                 filter: {
-                    property: 'Status',
-                    select: {
-                        does_not_equal: 'Done'
+                    property: 'Date',
+                    date: {
+                        equals: today
                     }
                 },
                 sorts: [
                     {
-                        property: 'Priority',
-                        direction: 'ascending'
+                        property: 'Status',
+                        direction: 'descending' // Todo first, then Done
                     },
                     {
-                        property: 'Due Date',
-                        direction: 'ascending'
+                        property: 'Priority',
+                        direction: 'ascending' // High, Medium, Low
                     }
                 ]
             });
@@ -471,26 +482,37 @@ export class VoiceQueryController {
                 task: page.properties.Task?.title[0]?.plain_text || '',
                 status: page.properties.Status?.select?.name || 'Todo',
                 priority: page.properties.Priority?.select?.name || 'Medium',
-                category: page.properties.Category?.select?.name || '',
-                dueDate: page.properties['Due Date']?.date?.start || ''
+                category: page.properties.Category?.select?.name || ''
             }));
 
             const todoTasks = tasks.filter((t: any) => t.status === 'Todo');
-            const inProgressTasks = tasks.filter((t: any) => t.status === 'In Progress');
+            const doneTasks = tasks.filter((t: any) => t.status === 'Done');
 
-            let message = `📋 You have ${tasks.length} active tasks:\n`;
+            if (tasks.length === 0) {
+                return {
+                    success: true,
+                    message: "📋 No tasks for today yet. Start by adding some!",
+                    tasks: [],
+                    stats: { total: 0, todo: 0, done: 0 }
+                };
+            }
+
+            let message = `📋 Today's tasks (${doneTasks.length}/${tasks.length} done):\n`;
+
+            // List todo tasks
             if (todoTasks.length > 0) {
-                message += `📝 ${todoTasks.length} to do\n`;
-            }
-            if (inProgressTasks.length > 0) {
-                message += `⏳ ${inProgressTasks.length} in progress`;
+                message += '\n📝 To do:\n';
+                todoTasks.forEach((task: any, index: number) => {
+                    const priority = task.priority === 'High' ? '🔴' : task.priority === 'Low' ? '🟢' : '🟡';
+                    message += `${index + 1}. ${task.task} ${priority}\n`;
+                });
             }
 
-            // Add top 3 tasks to message
-            if (tasks.length > 0) {
-                message += '\n\nTop tasks:';
-                tasks.slice(0, 3).forEach((task: any, index: number) => {
-                    message += `\n${index + 1}. ${task.task} (${task.priority})`;
+            // List completed tasks
+            if (doneTasks.length > 0) {
+                message += '\n✅ Completed:\n';
+                doneTasks.forEach((task: any) => {
+                    message += `• ${task.task}\n`;
                 });
             }
 
@@ -501,7 +523,7 @@ export class VoiceQueryController {
                 stats: {
                     total: tasks.length,
                     todo: todoTasks.length,
-                    inProgress: inProgressTasks.length
+                    done: doneTasks.length
                 }
             };
         } catch (error) {
@@ -538,6 +560,9 @@ export class VoiceQueryController {
         }
         if (lowerText.includes('learn') || lowerText.includes('study') || lowerText.includes('course')) {
             return 'Learning';
+        }
+        if (lowerText.includes('email') || lowerText.includes('reply') || lowerText.includes('send')) {
+            return 'Email';
         }
         return 'Other';
     }

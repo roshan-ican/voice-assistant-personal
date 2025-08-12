@@ -55,6 +55,9 @@ export const config: AppConfig = {
     upload: {
         maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760'), // 10MB
         uploadDir: process.env.UPLOAD_DIR || './uploads'
+    },
+    notion_db: {
+        uri: process.env.NOTION_DB_ID || 'no notion db id provided' // Fallback if not set
     }
 };
 

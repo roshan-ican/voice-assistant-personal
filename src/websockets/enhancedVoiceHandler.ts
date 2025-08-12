@@ -452,7 +452,7 @@ export class EnhancedVoiceWebSocketHandler {
             data: {
                 language: language,
                 message: `Language changed to ${language}`,
-                aiModel: 'gemini-1.5-flash'
+                aiModel: 'gemini-1.5-flash-flash'
             },
             timestamp: new Date().toISOString()
         });

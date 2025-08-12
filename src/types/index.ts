@@ -284,6 +284,9 @@ export interface AppConfig {
         maxFileSize: number;
         uploadDir: string;
     };
+    notion_db: {
+        uri: string;
+    };
 }
 
 // Repository Types

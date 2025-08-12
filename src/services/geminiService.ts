@@ -167,36 +167,38 @@ export class GeminiService {
     }> {
         try {
             const prompt = `
-                Analyze this voice command for a todo app and extract the intent.
-                
-                Command: "${text}"
-                
-                Context:
-                - Current page ID: ${context?.currentPageId || 'none'}
-                
-                Determine:
-                1. Action: create, complete, update, delete, list, or unclear
-                2. Todo text (for create)
-                3. Target todo (for complete/update/delete - can be text match or position like "first", "last")
-                4. New text (for update)
-                5. Page hint (if user mentions a specific list)
-                
-                Examples:
-                - "add buy milk" → action: create, todoText: "buy milk"
-                - "check off the first one" → action: complete, targetTodo: "first"
-                - "mark buy groceries as done" → action: complete, targetTodo: "buy groceries"
-                - "change milk to almond milk" → action: update, targetTodo: "milk", newText: "almond milk"
-                - "show my todos" → action: list
-                
-                Return JSON: {
-                    "action": "...",
-                    "todoText": "...",
-                    "targetTodo": "...",
-                    "newText": "...",
-                    "pageHint": "...",
-                    "confidence": 0.0-1.0
-                }
-            `;
+            Analyze this voice command for a todo app and extract the user's intent.
+
+            ## Command
+            "${text}"
+
+            ## Context
+            - Current page ID: ${context?.currentPageId || 'none'}
+            - Today's Date: ${new Date().toLocaleDateString()}
+
+            ## Rules for Intent Recognition
+            1.  **Completion Intent:** Commands using past-tense verbs (e.g., "bought", "finished", "completed", "learnt", "sent") strongly imply a 'complete' action. The 'targetTodo' should be the object of the action (e.g., for "bought milk", the target is "milk").
+            2.  **Creation Intent:** Commands usually start with verbs like "add", "create", "remind me to", or are simple noun phrases (e.g., "buy milk").
+            3.  **Update Intent:** Look for keywords like "change", "update", "rename".
+            4.  **Targeting:** Identify the task being referred to. This can be by its name or position ("the first one", "the last task").
+
+            ## Examples
+            - "add buy milk for the party tomorrow" → action: create, todoText: "buy milk for the party"
+            - "remind me to call the doctor" → action: create, todoText: "call the doctor"
+            - "finished the quarterly report" → action: complete, targetTodo: "quarterly report"
+            - "bought the groceries" → action: complete, targetTodo: "groceries"
+            - "I learnt DSA" → action: complete, targetTodo: "DSA"
+            - "check off the first one" → action: complete, targetTodo: "first"
+            - "change milk to almond milk" → action: update, targetTodo: "milk", newText: "almond milk"
+            - "delete the 'review design' task" → action: delete, targetTodo: "review design"
+            - "show my tasks" → action: list
+            - "what's on my list for today" → action: list
+
+            ## Output
+            Return a single, minified JSON object with your analysis.
+
+            JSON:
+        `;
 
             const result = await this.textModel.generateContent(prompt);
             const response = result.response.text();
@@ -204,28 +206,40 @@ export class GeminiService {
             // Extract JSON from response
             const jsonMatch = response.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
-                throw new Error('No JSON found in response');
+                throw new Error('No JSON found in LLM response');
             }
 
-            return JSON.parse(jsonMatch[0]);
-        } catch (error) {
-            logger.error('Failed to parse voice command:', error);
+            // Add null defaults to prevent downstream errors
+            const parsedJson = JSON.parse(jsonMatch[0]);
+            return {
+                dueDate: undefined,
+                area: undefined,
+                project: undefined,
+                priority: 'Medium',
+                todoText: undefined,
+                targetTodo: undefined,
+                newText: undefined,
+                pageHint: undefined,
+                ...parsedJson
+            };
 
-            // Fallback to simple parsing
+        } catch (error) {
+            // Your fallback logic can remain as a last resort
+            console.error('Failed to parse voice command with LLM, using fallback:', error);
+
             const lowerText = text.toLowerCase();
 
             if (lowerText.includes('add') || lowerText.includes('create')) {
                 const todoText = text.replace(/^(add|create|make)\s+/i, '').trim();
-                return { action: 'create', todoText, confidence: 0.8 };
+                return { action: 'create', todoText, confidence: 0.8 } as any;
             }
 
             if (lowerText.includes('complete') || lowerText.includes('done') || lowerText.includes('check')) {
                 const targetTodo = text.replace(/^(complete|done|check|mark)\s+/i, '').trim();
-                return { action: 'complete', targetTodo, confidence: 0.7 };
+                return { action: 'complete', targetTodo, confidence: 0.7 } as any;
             }
 
             if (lowerText.includes('update') || lowerText.includes('change')) {
-                // Try to extract old and new text
                 const match = text.match(/(?:update|change)\s+(.+?)\s+to\s+(.+)/i);
                 if (match) {
                     return {
@@ -233,20 +247,20 @@ export class GeminiService {
                         targetTodo: match[1]?.trim(),
                         newText: match[2]?.trim(),
                         confidence: 0.7
-                    } as any
+                    } as any;
                 }
             }
 
             if (lowerText.includes('delete') || lowerText.includes('remove')) {
                 const targetTodo = text.replace(/^(delete|remove)\s+/i, '').trim();
-                return { action: 'delete', targetTodo, confidence: 0.7 };
+                return { action: 'delete', targetTodo, confidence: 0.7 } as any;
             }
 
             if (lowerText.includes('show') || lowerText.includes('list')) {
-                return { action: 'list', confidence: 0.9 };
+                return { action: 'list', confidence: 0.9 } as any;
             }
 
-            return { action: 'unclear', confidence: 0.3 };
+            return { action: 'unclear', confidence: 0.3 } as any;
         }
     }
 
@@ -497,7 +511,7 @@ export class EnhancedGeminiService {
 
     constructor(apiKey: string) {
         this.genAI = new GoogleGenerativeAI(apiKey);
-        this.textModel = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        this.textModel = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash-flash' });
         this.embeddingModel = this.genAI.getGenerativeModel({ model: 'embedding-001' });
     }
 
