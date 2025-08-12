@@ -11,7 +11,7 @@ interface VoiceSession {
 const sessions = new Map<string, VoiceSession>();
 
 export function setupSimpleVoiceWebSocket(app: FastifyInstance) {
-  app.get('/ws/voice', { websocket: true }, (connection, req) => {
+  app.get('/ws/notion/voice', { websocket: true }, (connection, req) => {
     const ws = connection.socket;
     const sessionId = `session_${Date.now()}`;
     

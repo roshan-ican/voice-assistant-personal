@@ -154,6 +154,10 @@ export class GeminiService {
      * Parse voice command intent for todo operations
      */
     async parseVoiceCommand(text: string, context?: any): Promise<{
+        dueDate: string | undefined;
+        area: string | undefined;
+        project: string | undefined;
+        priority: string;
         action: 'create' | 'complete' | 'update' | 'delete' | 'list' | 'unclear';
         todoText?: string;
         targetTodo?: string;

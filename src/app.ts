@@ -1,11 +1,13 @@
 // src/app.ts - Enhanced with Real Gemini Integration
 import Fastify from 'fastify';
+import fastifyWebsocket from '@fastify/websocket';
+import fastifyHelmet from '@fastify/helmet';
+import fastifyCors from '@fastify/cors';
 import { config, validateConfig } from './utils/config.js';
 import { logger } from './utils/logger.js';
 import { dbManager } from './data/database/mongodb.js';
 import { UserRepository } from './data/repositories/userRepository.js';
 import { TodoRepository } from './data/repositories/todoRepository.js';
-import { enhancedWsManager } from './websockets/enhancedWebSocketManager.js';
 import { GeminiService } from './services/geminiService.js';
 import type { DatabaseHealth } from './types/index.js';
 import { ElevenLabsService } from './services/elevenLabs.js';
@@ -14,7 +16,7 @@ import { PineconeService } from './services/pineconeService.js';
 import { setupSimpleVoiceWebSocket } from './handler/simpleNotion.js';
 import notionRoutes from './routes/notionRoutes.js';
 import voiceRoutes from './routes/voiceQueryRoutes.js';
-
+import registerWebsocket from './websockets/web_socket.js';
 
 validateConfig();
 
@@ -30,8 +32,20 @@ const loggerOptions = config.node_env === 'development' ? {
 } : {
   level: config.logging.level
 };
+
 const fastify = Fastify({ logger: loggerOptions });
 
+// Register WebSocket plugin ONCE at the beginning
+await fastify.register(fastifyWebsocket);
+
+// Register other plugins
+await fastify.register(fastifyHelmet);
+await fastify.register(fastifyCors, {
+  origin: config.node_env === 'development' ? true : ['http://localhost:3000'],
+  credentials: true
+});
+
+// Initialize services
 const elevenLabsService = new ElevenLabsService(config.apis.elevenlabs);
 const notionService = new NotionService(config.apis.notion, config.apis.notion);
 const pineconeService = new PineconeService(
@@ -39,21 +53,7 @@ const pineconeService = new PineconeService(
   config.apis.pinecone.apiKey,
   config.apis.pinecone.index
 );
-
-// Initialize Gemini service
 const geminiService = new GeminiService();
-
-// Register plugins
-await fastify.register(import('@fastify/helmet'));
-await fastify.register(import('@fastify/cors'), {
-  origin: config.node_env === 'development' ? true : ['http://localhost:3000'],
-  credentials: true
-});
-await fastify.register(import('@fastify/websocket'));
-fastify.register(async function (fastify) {
-  setupSimpleVoiceWebSocket(fastify);
-});
-
 
 // Connect to database
 await dbManager.connect();
@@ -78,10 +78,17 @@ declare module 'fastify' {
   }
 }
 
+// Register WebSocket routes
+await fastify.register(registerWebsocket);
+
+// Register simple voice WebSocket
+fastify.register(async function (fastify) {
+  setupSimpleVoiceWebSocket(fastify);
+});
+
 // Enhanced Health Check with Gemini Status
 fastify.get('/health', async () => {
   const dbHealth: DatabaseHealth = await dbManager.healthCheck();
-  const wsHealth = await enhancedWsManager.performSystemHealthCheck();
   const geminiHealth = await geminiService.healthCheck();
 
   return {
@@ -94,8 +101,6 @@ fastify.get('/health', async () => {
       mongodb: dbHealth.status === 'connected' ? '✅' : '❌',
       gemini: geminiHealth.status === 'healthy' ? '🤖✅' :
         geminiHealth.status === 'degraded' ? '🤖⚠️' : '🤖❌',
-      websockets: wsHealth.services.websockets === 'healthy' ? '🎤✅' : '🎤❌',
-      active_connections: enhancedWsManager.getActiveConnections(),
       ai_model: geminiHealth.model
     },
     features: {
@@ -106,18 +111,12 @@ fastify.get('/health', async () => {
       ai_enhancement: 'enabled',
       semantic_search: 'ready'
     },
-    stats: enhancedWsManager.getStats()
   };
 });
 
-
-
-
+// Register routes
 await fastify.register(notionRoutes, { prefix: '/api/v1' });
-
-await fastify.register(voiceRoutes, { prefix: 'api/v1' })
-
-
+await fastify.register(voiceRoutes, { prefix: 'api/v1' });
 
 // Error handler
 fastify.setErrorHandler((error, request, reply) => {
@@ -138,7 +137,6 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
   logger.info(`Received ${signal}, shutting down gracefully...`);
 
   try {
-    enhancedWsManager.shutdown();
     await new Promise(resolve => setTimeout(resolve, 2000));
     await fastify.close();
     await dbManager.disconnect();
@@ -176,7 +174,5 @@ const start = async (): Promise<void> => {
     process.exit(1);
   }
 };
-
-
 
 start().catch(console.error);
