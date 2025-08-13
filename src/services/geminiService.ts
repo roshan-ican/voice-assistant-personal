@@ -153,7 +153,7 @@ export class GeminiService {
     /**
      * Parse voice command intent for todo operations
      */
-    async parseVoiceCommand(text: string, context?: any): Promise<{
+    async parseVoiceCommand(text: string, context?: any, maxRetries: number = 3): Promise<{
         dueDate: string | undefined;
         area: string | undefined;
         project: string | undefined;
@@ -165,8 +165,10 @@ export class GeminiService {
         pageHint?: string;
         confidence: number;
     }> {
-        try {
-            const prompt = `
+        // Retry logic with exponential backoff
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const prompt = `
             Analyze this voice command for a todo app and extract the user's intent.
 
             ## Command
@@ -200,68 +202,185 @@ export class GeminiService {
             JSON:
         `;
 
-            const result = await this.textModel.generateContent(prompt);
-            const response = result.response.text();
+                const result = await this.textModel.generateContent(prompt);
+                const response = result.response.text();
 
-            // Extract JSON from response
-            const jsonMatch = response.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) {
-                throw new Error('No JSON found in LLM response');
+                // Extract JSON from response
+                const jsonMatch = response.match(/\{[\s\S]*\}/);
+                if (!jsonMatch) {
+                    throw new Error('No JSON found in LLM response');
+                }
+
+                // Add null defaults to prevent downstream errors
+                const parsedJson = JSON.parse(jsonMatch[0]);
+                return {
+                    dueDate: undefined,
+                    area: undefined,
+                    project: undefined,
+                    priority: 'Medium',
+                    todoText: undefined,
+                    targetTodo: undefined,
+                    newText: undefined,
+                    pageHint: undefined,
+                    ...parsedJson
+                };
+
+            } catch (error: any) {
+                const isOverloadError = error.message?.includes('503') ||
+                    error.message?.includes('overloaded') ||
+                    error.message?.includes('Service Unavailable');
+
+                if (isOverloadError && attempt < maxRetries) {
+                    // Exponential backoff: 1s, 2s, 4s
+                    const delay = Math.pow(2, attempt - 1) * 1000;
+                    console.log(`Gemini overloaded (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
+
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue; // Try again
+                }
+
+                // If it's the last attempt or not an overload error, use fallback
+                console.error(`Failed to parse voice command with LLM (attempt ${attempt}/${maxRetries}), using fallback:`, error);
+                return this.getFallbackResponse(text);
             }
+        }
 
-            // Add null defaults to prevent downstream errors
-            const parsedJson = JSON.parse(jsonMatch[0]);
+        // This should never be reached, but just in case
+        return this.getFallbackResponse(text);
+    }
+
+    private getFallbackResponse(text: string): {
+        dueDate: string | undefined;
+        area: string | undefined;
+        project: string | undefined;
+        priority: string;
+        action: 'create' | 'complete' | 'update' | 'delete' | 'list' | 'unclear';
+        todoText?: string;
+        targetTodo?: string;
+        newText?: string;
+        pageHint?: string;
+        confidence: number;
+    } {
+        const lowerText = text.toLowerCase();
+
+        // Enhanced past-tense completion detection
+        const pastTensePatterns = [
+            /\b(bought|purchased|got|acquired)\s+(.+)/i,
+            /\b(finished|completed|done with)\s+(.+)/i,
+            /\b(sent|emailed|called|contacted)\s+(.+)/i,
+            /\b(learnt|learned|studied)\s+(.+)/i,
+            /\b(read|reviewed|checked)\s+(.+)/i,
+            /\b(fixed|repaired|solved)\s+(.+)/i,
+            /\b(visited|went to)\s+(.+)/i
+        ];
+
+        for (const pattern of pastTensePatterns) {
+            const match = text.match(pattern) as any
+            if (match) {
+                return {
+                    action: 'complete',
+                    targetTodo: match[2]?.trim(),
+                    confidence: 0.8,
+                    dueDate: undefined,
+                    area: undefined,
+                    project: undefined,
+                    priority: 'Medium'
+                };
+            }
+        }
+
+        // Creation patterns
+        if (lowerText.includes('add') || lowerText.includes('create') || lowerText.includes('remind me')) {
+            const todoText = text.replace(/^(add|create|make|remind me to)\s+/i, '').trim();
             return {
+                action: 'create',
+                todoText,
+                confidence: 0.8,
                 dueDate: undefined,
                 area: undefined,
                 project: undefined,
-                priority: 'Medium',
-                todoText: undefined,
-                targetTodo: undefined,
-                newText: undefined,
-                pageHint: undefined,
-                ...parsedJson
+                priority: 'Medium'
             };
-
-        } catch (error) {
-            // Your fallback logic can remain as a last resort
-            console.error('Failed to parse voice command with LLM, using fallback:', error);
-
-            const lowerText = text.toLowerCase();
-
-            if (lowerText.includes('add') || lowerText.includes('create')) {
-                const todoText = text.replace(/^(add|create|make)\s+/i, '').trim();
-                return { action: 'create', todoText, confidence: 0.8 } as any;
-            }
-
-            if (lowerText.includes('complete') || lowerText.includes('done') || lowerText.includes('check')) {
-                const targetTodo = text.replace(/^(complete|done|check|mark)\s+/i, '').trim();
-                return { action: 'complete', targetTodo, confidence: 0.7 } as any;
-            }
-
-            if (lowerText.includes('update') || lowerText.includes('change')) {
-                const match = text.match(/(?:update|change)\s+(.+?)\s+to\s+(.+)/i);
-                if (match) {
-                    return {
-                        action: 'update',
-                        targetTodo: match[1]?.trim(),
-                        newText: match[2]?.trim(),
-                        confidence: 0.7
-                    } as any;
-                }
-            }
-
-            if (lowerText.includes('delete') || lowerText.includes('remove')) {
-                const targetTodo = text.replace(/^(delete|remove)\s+/i, '').trim();
-                return { action: 'delete', targetTodo, confidence: 0.7 } as any;
-            }
-
-            if (lowerText.includes('show') || lowerText.includes('list')) {
-                return { action: 'list', confidence: 0.9 } as any;
-            }
-
-            return { action: 'unclear', confidence: 0.3 } as any;
         }
+
+        // Simple noun phrases (likely creation)
+        if (!lowerText.match(/\b(show|list|what|display|tell|how)\b/) && text.trim().length > 3) {
+            return {
+                action: 'create',
+                todoText: text.trim(),
+                confidence: 0.6,
+                dueDate: undefined,
+                area: undefined,
+                project: undefined,
+                priority: 'Medium'
+            };
+        }
+
+        // Completion patterns
+        if (lowerText.includes('complete') || lowerText.includes('done') || lowerText.includes('check')) {
+            const targetTodo = text.replace(/^(complete|done|check|mark)\s+/i, '').trim();
+            return {
+                action: 'complete',
+                targetTodo,
+                confidence: 0.7,
+                dueDate: undefined,
+                area: undefined,
+                project: undefined,
+                priority: 'Medium'
+            };
+        }
+
+        // Update patterns
+        if (lowerText.includes('update') || lowerText.includes('change')) {
+            const match = text.match(/(?:update|change)\s+(.+?)\s+to\s+(.+)/i) as any
+            if (match) {
+                return {
+                    action: 'update',
+                    targetTodo: match[1]?.trim(),
+                    newText: match[2]?.trim(),
+                    confidence: 0.7,
+                    dueDate: undefined,
+                    area: undefined,
+                    project: undefined,
+                    priority: 'Medium'
+                };
+            }
+        }
+
+        // Delete patterns
+        if (lowerText.includes('delete') || lowerText.includes('remove')) {
+            const targetTodo = text.replace(/^(delete|remove)\s+/i, '').trim();
+            return {
+                action: 'delete',
+                targetTodo,
+                confidence: 0.7,
+                dueDate: undefined,
+                area: undefined,
+                project: undefined,
+                priority: 'Medium'
+            };
+        }
+
+        // List patterns
+        if (lowerText.includes('show') || lowerText.includes('list') || lowerText.includes('what')) {
+            return {
+                action: 'list',
+                confidence: 0.9,
+                dueDate: undefined,
+                area: undefined,
+                project: undefined,
+                priority: 'Medium'
+            };
+        }
+
+        return {
+            action: 'unclear',
+            confidence: 0.3,
+            dueDate: undefined,
+            area: undefined,
+            project: undefined,
+            priority: 'Medium'
+        };
     }
 
     /**
