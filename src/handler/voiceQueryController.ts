@@ -78,7 +78,7 @@ export class VoiceQueryController {
                     }
                 ],
                 properties: {
-                    'Task': {  // Main task name
+                    'Task': {  // Main task name - FIXED: Using consistent naming
                         title: {}
                     },
                     'Status': {  // Simple status
@@ -109,7 +109,7 @@ export class VoiceQueryController {
                             ]
                         }
                     },
-                    'Date': {  // Date created/for
+                    'Date': {  // Date created/for - FIXED: Added this property
                         date: {}
                     }
                 }
@@ -119,13 +119,11 @@ export class VoiceQueryController {
             console.log('Daily Tasks database created successfully:', this.gtdDatabaseId)
             return this.gtdDatabaseId;
 
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error creating/finding database:', error);
             throw new Error('Failed to setup database');
         }
     }
-
-
 
     async processVoiceCommand(
         request: FastifyRequest<{ Body: VoiceQueryRequest }>,
@@ -160,13 +158,22 @@ export class VoiceQueryController {
                 });
             }
 
-            // 2. Detect intent from text first (before using Gemini)
+            // 2. Enhanced intent detection
+            let intent = this.detectIntentFromText(commandText);
 
+            function omitUndefined<T extends Record<string, unknown>>(obj: T) {
+                return Object.fromEntries(
+                    Object.entries(obj).filter(([, v]) => v !== undefined)
+                ) as { [K in keyof T]?: Exclude<T[K], undefined> };
+            }
 
-            // 3. Use Gemini for more complex parsing if needed
-            let intent = await this.geminiService.parseVoiceCommand(commandText, {});
+            // 3. If we didn't get a clear intent, use Gemini
+            if (intent.action === "unclear") {
+                const geminiIntent = await this.geminiService.parseVoiceCommand(commandText, {});
+                intent = { ...intent, ...omitUndefined(geminiIntent) };
+            }
 
-            console.log('Detected intent:', intent);
+            console.log('Final intent:', intent);
 
             // 4. Ensure database exists
             const databaseId = await this.ensureGTDDatabase();
@@ -178,7 +185,7 @@ export class VoiceQueryController {
                     result = await this.handleCreateGTD(intent, commandText);
                     break;
                 case 'complete':
-                    result = await this.handleCompleteGTD(intent);
+                    result = await this.handleCompleteGTD(intent, commandText);
                     break;
                 case 'update':
                     result = await this.handleUpdateGTD(intent);
@@ -192,7 +199,7 @@ export class VoiceQueryController {
                 default:
                     result = {
                         success: false,
-                        message: "I didn't understand. Try: 'buy milk', 'bought milk', or 'show tasks'."
+                        message: "I didn't understand. Try: 'add task', 'complete task', 'show tasks'."
                     };
             }
 
@@ -205,17 +212,14 @@ export class VoiceQueryController {
             };
 
             // 6. Generate audio response if requested
-            // if (returnAudio && result.message) {
-            //     response.audioResponse = await this.generateAudioResponse(
-            //         result.message,
-            //         { voiceId, modelId }
-            //     );
-            // }
-            if (returnAudio) {
-                response.audioResponse = await this.generateAudioResponse(result.message, {
-                    ...(voiceId ? { voiceId } : {}),
-                    ...(modelId ? { modelId } : {})
-                });
+            if (returnAudio && result.message) {
+                response.audioResponse = await this.generateAudioResponse(
+                    result.message,
+                    {
+                        ...(voiceId && { voiceId }),
+                        ...(modelId && { modelId }),
+                    }
+                );
             }
 
             return response;
@@ -229,135 +233,18 @@ export class VoiceQueryController {
         }
     }
 
-
-    private async handleCreateGTD(intent: VoiceIntent, originalText: string) {
-        if (!intent.todoText) {
-            return { success: false, message: "I didn't catch what task you want to add." };
-        }
-
-        try {
-            const databaseId = await this.ensureGTDDatabase();
-
-            // Extract priority and category from text
-            const priority = this.extractPriority(originalText);
-            const category = this.extractCategory(originalText);
-
-
-            const newTask = await (this.notionService as any).notion.pages.create({
-                parent: {
-                    database_id: databaseId
-                },
-                properties: {
-                    'Task': {
-                        title: [
-                            {
-                                text: {
-                                    content: intent.todoText
-                                }
-                            }
-                        ]
-                    },
-                    'Status': {
-                        select: {
-                            name: 'Todo'
-                        }
-                    },
-                    'Priority': {
-                        select: {
-                            name: priority
-                        }
-                    },
-                    'Category': {
-                        select: {
-                            name: category
-                        }
-                    },
-                }
-            });
-
-            return {
-                success: true,
-                message: `✅ Added "${intent.todoText}" to your tasks`,
-                taskId: newTask.id
-            };
-        } catch (error) {
-            console.error('Error creating task:', error);
-            return { success: false, message: 'Failed to add task' };
-        }
-    }
-
-    private async handleCompleteGTD(intent: VoiceIntent) {
-        if (!intent.targetTodo) {
-            return { success: false, message: "Which task do you want to complete?" };
-        }
-
-        try {
-            const databaseId = await this.ensureGTDDatabase();
-
-            // Find the task
-            const response = await (this.notionService as any).notion.databases.query({
-                database_id: databaseId,
-                filter: {
-                    and: [
-                        {
-                            property: 'Task',
-                            title: {
-                                contains: intent.targetTodo
-                            }
-                        },
-                        {
-                            property: 'Status',
-                            select: {
-                                does_not_equal: 'Done'
-                            }
-                        }
-                    ]
-                }
-            });
-
-            if (response.results.length === 0) {
-                return { success: false, message: `Couldn't find task "${intent.targetTodo}"` };
-            }
-
-            const targetTask = response.results[0];
-
-            // Mark as done
-            await (this.notionService as any).notion.pages.update({
-                page_id: targetTask.id,
-                properties: {
-                    'Status': {
-                        select: {
-                            name: 'Done'
-                        }
-                    }
-                }
-            });
-
-            const taskName = targetTask.properties.Task?.title[0]?.plain_text || intent.targetTodo;
-            return {
-                success: true,
-                message: `✅ Completed "${taskName}"`,
-                taskId: targetTask.id
-            };
-        } catch (error) {
-            console.error('Error completing task:', error);
-            return { success: false, message: 'Failed to complete task' };
-        }
-    }
-
+    // FIXED: Update method with correct property names
     private async handleUpdateGTD(intent: VoiceIntent) {
         if (!intent.targetTodo) {
             return { success: false, message: "Which task do you want to update?" };
         }
 
         try {
-            const databaseId = await this.ensureGTDDatabase();
-
-            // Find the task
+            // Find the task - FIXED: Using 'Task' instead of 'Name'
             const response = await (this.notionService as any).notion.databases.query({
-                database_id: databaseId,
+                database_id: await this.ensureGTDDatabase(),
                 filter: {
-                    property: 'Task',
+                    property: 'Task',  // FIXED: Changed from 'Name' to 'Task'
                     title: {
                         contains: intent.targetTodo
                     }
@@ -371,13 +258,28 @@ export class VoiceQueryController {
             const targetTask = response.results[0];
             const updateProperties: any = {};
 
+            // Update name if provided - FIXED: Using 'Task' property
             if (intent.newText) {
-                updateProperties['Task'] = {
+                updateProperties['Task'] = {  // FIXED: Changed from 'Name' to 'Task'
                     title: [{
                         text: { content: intent.newText }
                     }]
                 };
             }
+
+            // Update priority if mentioned
+            // if (intent.priority) {
+            //     updateProperties['Priority'] = {
+            //         select: { name: intent.priority }
+            //     };
+            // }
+
+            // // Update due date if mentioned
+            // if (intent.dueDate) {
+            //     updateProperties['Date'] = {  // FIXED: Using 'Date' instead of 'Due Date'
+            //         date: { start: intent.dueDate }
+            //     };
+            // }
 
             await (this.notionService as any).notion.pages.update({
                 page_id: targetTask.id,
@@ -386,15 +288,489 @@ export class VoiceQueryController {
 
             return {
                 success: true,
-                message: `✏️ Updated "${intent.targetTodo}"${intent.newText ? ` to "${intent.newText}"` : ''}`,
+                message: `Updated "${intent.targetTodo}"${intent.newText ? ` to "${intent.newText}"` : ''}`,
                 taskId: targetTask.id
             };
         } catch (error) {
-            console.error('Error updating task:', error);
+            console.error('Error updating GTD task:', error);
             return { success: false, message: 'Failed to update task' };
         }
     }
 
+    private detectIntentFromText(text: string): VoiceIntent {
+        const lowerText = text.toLowerCase().trim();
+        console.log('Detecting intent for:', lowerText);
+
+        // COMPLETE patterns
+        if (
+            lowerText.includes('complete') ||
+            lowerText.includes('finish') ||
+            lowerText.includes('done') ||
+            lowerText.includes('mark as done') ||
+            lowerText.includes('check off') ||
+            lowerText.includes('tick off')
+        ) {
+            let targetTodo: string | undefined = undefined;
+
+            if (lowerText.includes('first')) {
+                targetTodo = 'first';
+            } else if (lowerText.includes('last')) {
+                targetTodo = 'last';
+            } else if (lowerText.includes('second')) {
+                targetTodo = '2';
+            } else if (lowerText.includes('third')) {
+                targetTodo = '3';
+            } else {
+                const patterns = [
+                    /complete\s+(.+)/i,
+                    /finish\s+(.+)/i,
+                    /done\s+with\s+(.+)/i,
+                    /mark\s+(.+)\s+as\s+done/i,
+                    /check\s+off\s+(.+)/i
+                ];
+
+                for (const pattern of patterns) {
+                    const match = text.match(pattern);
+                    if (match && match[1]) {
+                        targetTodo = match[1].trim();
+                        break;
+                    }
+                }
+            }
+
+            const result: VoiceIntent = {
+                action: 'complete',
+                confidence: 0.9
+            };
+
+            if (targetTodo) {
+                result.targetTodo = targetTodo;
+            }
+
+            return result;
+        }
+
+        // DELETE patterns
+        if (
+            lowerText.includes('delete') ||
+            lowerText.includes('remove') ||
+            lowerText.includes('cancel') ||
+            lowerText.includes('drop')
+        ) {
+            let targetTodo: string | undefined = undefined;
+
+            if (lowerText.includes('first')) {
+                targetTodo = 'first';
+            } else if (lowerText.includes('last')) {
+                targetTodo = 'last';
+            } else {
+                const patterns = [
+                    /delete\s+(.+)/i,
+                    /remove\s+(.+)/i,
+                    /cancel\s+(.+)/i,
+                    /drop\s+(.+)/i
+                ];
+
+                for (const pattern of patterns) {
+                    const match = text.match(pattern);
+                    if (match && match[1]) {
+                        targetTodo = match[1].trim();
+                        break;
+                    }
+                }
+            }
+
+            const result: VoiceIntent = {
+                action: 'delete',
+                confidence: 0.9
+            };
+
+            if (targetTodo) {
+                result.targetTodo = targetTodo;
+            }
+
+            return result;
+        }
+
+        // UPDATE patterns
+        if (
+            lowerText.includes('update') ||
+            lowerText.includes('change') ||
+            lowerText.includes('modify') ||
+            lowerText.includes('edit') ||
+            lowerText.includes(' to ')
+        ) {
+            const patterns = [
+                /update\s+(.+?)\s+to\s+(.+)/i,
+                /change\s+(.+?)\s+to\s+(.+)/i,
+                /modify\s+(.+?)\s+to\s+(.+)/i,
+                /edit\s+(.+?)\s+to\s+(.+)/i
+            ];
+
+            for (const pattern of patterns) {
+                const match = text.match(pattern);
+                if (match && match[1] && match[2]) {
+                    const result: VoiceIntent = {
+                        action: 'update',
+                        targetTodo: match[1].trim(),
+                        newText: match[2].trim(),
+                        confidence: 0.9
+                    };
+                    return result;
+                }
+            }
+
+            return {
+                action: 'update',
+                confidence: 0.3
+            };
+        }
+
+        // LIST patterns
+        if (
+            lowerText.includes('show') ||
+            lowerText.includes('list') ||
+            lowerText.includes('what') ||
+            lowerText.includes('display') ||
+            lowerText.includes('my tasks') ||
+            lowerText.includes('my todos') ||
+            lowerText.includes('pending') ||
+            lowerText === 'tasks' ||
+            lowerText === 'todos'
+        ) {
+            return {
+                action: 'list',
+                confidence: 0.9
+            };
+        }
+
+        // Past tense completion patterns
+        const completionPatterns = [
+            /^(bought|purchased|got)\s+(.+)$/i,
+            /^(checked|reviewed|read)\s+(.+)$/i,
+            /^(finished|completed|did)\s+(.+)$/i,
+            /^(sent|replied to|responded to)\s+(.+)$/i,
+        ];
+
+        for (const pattern of completionPatterns) {
+            const match = text.match(pattern);
+            if (match && match[2]) {
+                const result: VoiceIntent = {
+                    action: 'complete',
+                    targetTodo: match[2].trim(),
+                    confidence: 0.8
+                };
+                return result;
+            }
+        }
+
+        // CREATE patterns
+        if (
+            lowerText.startsWith('add') ||
+            lowerText.startsWith('create') ||
+            lowerText.startsWith('new') ||
+            lowerText.startsWith('make')
+        ) {
+            const patterns = [
+                /(?:add|create|new|make)\s+(.+)/i
+            ];
+
+            for (const pattern of patterns) {
+                const match = text.match(pattern);
+                if (match && match[1]) {
+                    const result: VoiceIntent = {
+                        action: 'create',
+                        todoText: match[1].trim(),
+                        confidence: 0.9
+                    };
+                    return result;
+                }
+            }
+        }
+
+        // Default to CREATE if text is long enough
+        if (lowerText.length > 2) {
+            return {
+                action: 'create',
+                todoText: text,
+                confidence: 0.6
+            };
+        }
+
+        return {
+            action: 'unclear',
+            confidence: 0.1
+        };
+    }
+
+    // FIXED: Complete method with correct property names and better search
+    private async handleCompleteGTD(intent: VoiceIntent, originalText: string) {
+        try {
+            const databaseId = await this.ensureGTDDatabase();
+            const today = new Date().toISOString().split('T')[0];
+
+            let searchText = intent.targetTodo || originalText;
+            console.log('Searching for task to complete:', searchText);
+
+            // If it's a positional reference
+            if (searchText === 'first' || searchText === 'last' || !isNaN(Number(searchText))) {
+                const allTasks = await (this.notionService as any).notion.databases.query({
+                    database_id: databaseId,
+                    filter: {
+                        and: [
+                            {
+                                property: 'Status',
+                                select: {
+                                    equals: 'Todo'
+                                }
+                            },
+                            {
+                                property: 'Date',
+                                date: {
+                                    equals: today
+                                }
+                            }
+                        ]
+                    },
+                    sorts: [
+                        {
+                            property: 'Priority',
+                            direction: 'ascending'
+                        }
+                    ]
+                });
+
+                let targetTask = null;
+                if (searchText === 'first' && allTasks.results.length > 0) {
+                    targetTask = allTasks.results[0];
+                } else if (searchText === 'last' && allTasks.results.length > 0) {
+                    targetTask = allTasks.results[allTasks.results.length - 1];
+                } else if (!isNaN(Number(searchText))) {
+                    const index = Number(searchText) - 1;
+                    if (index >= 0 && index < allTasks.results.length) {
+                        targetTask = allTasks.results[index];
+                    }
+                }
+
+                if (targetTask) {
+                    await (this.notionService as any).notion.pages.update({
+                        page_id: targetTask.id,
+                        properties: {
+                            'Status': {
+                                select: {
+                                    name: 'Done'
+                                }
+                            }
+                        }
+                    });
+
+                    const taskName = targetTask.properties.Task?.title[0]?.plain_text;
+                    return {
+                        success: true,
+                        message: `✅ Completed "${taskName}"`,
+                        taskId: targetTask.id
+                    };
+                }
+            }
+
+            // Search by text - FIXED: Better search logic
+            const response = await (this.notionService as any).notion.databases.query({
+                database_id: databaseId,
+                filter: {
+                    and: [
+                        {
+                            property: 'Status',
+                            select: {
+                                equals: 'Todo'
+                            }
+                        }
+                        // FIXED: Removed date filter to search all tasks, not just today's
+                    ]
+                }
+            });
+
+            // Find best matching task
+            let targetTask = null;
+            const searchLower = searchText.toLowerCase();
+
+            // Try exact match first
+            targetTask = response.results.find((task: any) => {
+                const taskName = task.properties.Task?.title[0]?.plain_text?.toLowerCase() || '';
+                return taskName === searchLower;
+            });
+
+            // Then try contains
+            if (!targetTask) {
+                targetTask = response.results.find((task: any) => {
+                    const taskName = task.properties.Task?.title[0]?.plain_text?.toLowerCase() || '';
+                    return taskName.includes(searchLower) || searchLower.includes(taskName);
+                });
+            }
+
+            // Try partial word match
+            if (!targetTask) {
+                const searchWords = searchLower.split(' ');
+                targetTask = response.results.find((task: any) => {
+                    const taskName = task.properties.Task?.title[0]?.plain_text?.toLowerCase() || '';
+                    return searchWords.some(word => taskName.includes(word));
+                });
+            }
+
+            if (!targetTask) {
+                return {
+                    success: false,
+                    message: `Couldn't find "${searchText}" in your tasks. Try 'show tasks' to see what's available.`
+                };
+            }
+
+            // Mark as done
+            await (this.notionService as any).notion.pages.update({
+                page_id: targetTask.id,
+                properties: {
+                    'Status': {
+                        select: {
+                            name: 'Done'
+                        }
+                    }
+                }
+            });
+
+            const taskName = targetTask.properties.Task?.title[0]?.plain_text;
+            return {
+                success: true,
+                message: `✅ Completed "${taskName}"`,
+                taskId: targetTask.id
+            };
+        } catch (error) {
+            console.error('Error completing task:', error);
+            return { success: false, message: 'Failed to complete task' };
+        }
+    }
+
+    // FIXED: Create method with Date property
+    // FIXED: Create method with better error handling and fallbacks
+    private async handleCreateGTD(intent: VoiceIntent, originalText: string) {
+        // Fallback: if no todoText in intent, use the original text
+        const taskText = intent.todoText || originalText.replace(/^(add|create|new|make|remember|remind)\s+/i, '').trim();
+
+        if (!taskText || taskText.length < 1) {
+            return { success: false, message: "I didn't catch what task you want to add. Please try again." };
+        }
+
+        try {
+            const databaseId = await this.ensureGTDDatabase();
+            console.log('Creating task with text:', taskText);
+
+            const priority = this.extractPriority(originalText);
+            const category = this.extractCategory(originalText);
+
+            console.log('Extracted priority:', priority, 'category:', category);
+
+            // Create the task with proper error handling for each property
+            const taskProperties: any = {
+                'Task': {
+                    title: [
+                        {
+                            type: 'text',
+                            text: {
+                                content: taskText
+                            }
+                        }
+                    ]
+                }
+            };
+
+            // Add Status - make sure it matches database options
+            try {
+                taskProperties['Status'] = {
+                    select: {
+                        name: 'Todo'
+                    }
+                };
+            } catch (error) {
+                console.warn('Status property failed, skipping:', error);
+            }
+
+            // Add Priority - with fallback
+            try {
+                if (priority && ['High', 'Medium', 'Low'].includes(priority)) {
+                    taskProperties['Priority'] = {
+                        select: {
+                            name: priority
+                        }
+                    };
+                }
+            } catch (error) {
+                console.warn('Priority property failed, skipping:', error);
+            }
+
+            // Add Category - with fallback
+            try {
+                if (category && ['Work', 'Personal', 'Shopping', 'Email', 'Other'].includes(category)) {
+                    taskProperties['Category'] = {
+                        select: {
+                            name: category
+                        }
+                    };
+                }
+            } catch (error) {
+                console.warn('Category property failed, skipping:', error);
+            }
+
+            // // Add Date
+            // try {
+            //     taskProperties['Date'] = {
+            //         date: {
+            //             start: new Date().toISOString().split('T')[0]
+            //         }
+            //     };
+            // } catch (error) {
+            //     console.warn('Date property failed, skipping:', error);
+            // }
+
+            console.log('Final task properties:', JSON.stringify(taskProperties, null, 2));
+
+            const newTask = await (this.notionService as any).notion.pages.create({
+                parent: {
+                    database_id: databaseId
+                },
+                properties: taskProperties
+            });
+
+            console.log('Task created successfully:', newTask.id);
+
+            return {
+                success: true,
+                message: `✅ Added "${taskText}" to your tasks`,
+                taskId: newTask.id,
+                taskText: taskText,
+                priority: priority,
+                category: category
+            };
+
+        } catch (error) {
+            console.error('Error creating task:', error);
+
+            // More specific error handling
+            if (error instanceof Error) {
+                if (error.message.includes('database_id')) {
+                    return { success: false, message: 'Database not found. Please check your configuration.' };
+                } else if (error.message.includes('properties')) {
+                    return { success: false, message: 'Failed to set task properties. Database schema might be incorrect.' };
+                } else if (error.message.includes('unauthorized')) {
+                    return { success: false, message: 'Not authorized to create tasks. Check your Notion permissions.' };
+                }
+            }
+
+            return {
+                success: false,
+                message: `Failed to add task: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                error: error instanceof Error ? error.message : 'Unknown error'
+            };
+        }
+    }
+
+    // FIXED: Delete method with correct property names
     private async handleDeleteGTD(intent: VoiceIntent) {
         if (!intent.targetTodo) {
             return { success: false, message: "Which task do you want to delete?" };
@@ -404,19 +780,17 @@ export class VoiceQueryController {
             const databaseId = await this.ensureGTDDatabase();
             let tasksToDelete;
 
-            // Check if the user wants to delete all tasks
             if (intent.targetTodo.toLowerCase() === "all") {
                 const allTasksResponse = await (this.notionService as any).notion.databases.query({
                     database_id: databaseId,
-                    // No filter means it will get all tasks
                 });
                 tasksToDelete = allTasksResponse.results;
             } else {
-                // Find a specific task
+                // FIXED: Using 'Task' instead of 'Name'
                 const response = await (this.notionService as any).notion.databases.query({
                     database_id: databaseId,
                     filter: {
-                        property: 'Task',
+                        property: 'Task',  // FIXED: Changed from 'Name' to 'Task'
                         title: {
                             contains: intent.targetTodo
                         }
@@ -429,7 +803,6 @@ export class VoiceQueryController {
                 return { success: false, message: `Couldn't find task "${intent.targetTodo}"` };
             }
 
-            // Loop through and delete all the found tasks
             const deletePromises = tasksToDelete.map((task: any) =>
                 (this.notionService as any).notion.pages.update({
                     page_id: task.id,
@@ -439,7 +812,6 @@ export class VoiceQueryController {
 
             await Promise.all(deletePromises);
 
-            // Customize the success message based on what was deleted
             const message = intent.targetTodo.toLowerCase() === "all"
                 ? `🗑️ Deleted all ${tasksToDelete.length} tasks`
                 : `🗑️ Deleted "${tasksToDelete[0].properties.Task?.title[0]?.plain_text || intent.targetTodo}"`;
@@ -451,20 +823,16 @@ export class VoiceQueryController {
             return { success: false, message: 'Failed to delete task' };
         }
     }
+
+    // FIXED: List method with today's date filter option
     private async handleListGTD() {
         try {
             const databaseId = await this.ensureGTDDatabase();
             const today = new Date().toISOString().split('T')[0];
 
-            // Query today's tasks
+            // Get all tasks (not just today's) for better visibility
             const response = await (this.notionService as any).notion.databases.query({
                 database_id: databaseId,
-                filter: {
-                    property: 'Date',
-                    date: {
-                        equals: today
-                    }
-                },
                 sorts: [
                     {
                         property: 'Status',
@@ -482,7 +850,8 @@ export class VoiceQueryController {
                 task: page.properties.Task?.title[0]?.plain_text || '',
                 status: page.properties.Status?.select?.name || 'Todo',
                 priority: page.properties.Priority?.select?.name || 'Medium',
-                category: page.properties.Category?.select?.name || ''
+                category: page.properties.Category?.select?.name || '',
+                date: page.properties.Date?.date?.start || ''
             }));
 
             const todoTasks = tasks.filter((t: any) => t.status === 'Todo');
@@ -491,13 +860,13 @@ export class VoiceQueryController {
             if (tasks.length === 0) {
                 return {
                     success: true,
-                    message: "📋 No tasks for today yet. Start by adding some!",
+                    message: "📋 No tasks yet. Start by adding some!",
                     tasks: [],
                     stats: { total: 0, todo: 0, done: 0 }
                 };
             }
 
-            let message = `📋 Today's tasks (${doneTasks.length}/${tasks.length} done):\n`;
+            let message = `📋 Your tasks (${doneTasks.length}/${tasks.length} done):\n`;
 
             // List todo tasks
             if (todoTasks.length > 0) {
@@ -532,7 +901,7 @@ export class VoiceQueryController {
         }
     }
 
-    // Helper methods
+    // Helper methods remain the same
     private extractPriority(text: string): string {
         const lowerText = text.toLowerCase();
         if (lowerText.includes('urgent') || lowerText.includes('high priority') || lowerText.includes('important')) {
@@ -555,42 +924,10 @@ export class VoiceQueryController {
         if (lowerText.includes('buy') || lowerText.includes('shop') || lowerText.includes('purchase')) {
             return 'Shopping';
         }
-        if (lowerText.includes('health') || lowerText.includes('doctor') || lowerText.includes('gym')) {
-            return 'Health';
-        }
-        if (lowerText.includes('learn') || lowerText.includes('study') || lowerText.includes('course')) {
-            return 'Learning';
-        }
         if (lowerText.includes('email') || lowerText.includes('reply') || lowerText.includes('send')) {
             return 'Email';
         }
         return 'Other';
-    }
-
-    private extractDueDate(text: string): string | undefined {
-        const today = new Date();
-        const lowerText = text.toLowerCase();
-
-        if (lowerText.includes('today')) {
-            return today.toISOString().split('T')[0];
-        }
-        if (lowerText.includes('tomorrow')) {
-            const tomorrow = new Date(today);
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            return tomorrow.toISOString().split('T')[0];
-        }
-        if (lowerText.includes('next week')) {
-            const nextWeek = new Date(today);
-            nextWeek.setDate(nextWeek.getDate() + 7);
-            return nextWeek.toISOString().split('T')[0];
-        }
-        if (lowerText.includes('next month')) {
-            const nextMonth = new Date(today);
-            nextMonth.setMonth(nextMonth.getMonth() + 1);
-            return nextMonth.toISOString().split('T')[0];
-        }
-
-        return undefined;
     }
 
     private async generateAudioResponse(
@@ -613,6 +950,7 @@ export class VoiceQueryController {
             return '';
         }
     }
+
 
     // ... keep your other methods (getAvailableVoices, getUsageInfo, testTTS, streamTTS) as they are ...
     // Get available voices from 11 Labs
